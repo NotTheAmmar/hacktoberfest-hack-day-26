@@ -44,8 +44,8 @@ function setTabPill(state, text) {
 }
 
 function setBackendDot(state, text) {
-  backendDot.dataset.state = state;
-  backendTextEl.textContent = text;
+  if (backendDot) backendDot.dataset.state = state;
+  if (backendTextEl) backendTextEl.textContent = text;
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -305,17 +305,21 @@ btnFill.addEventListener('click', async () => {
 });
 
 // ── URL Save & Storage ────────────────────────────────────────────────────────
-btnSaveUrl.addEventListener('click', () => {
-  const val = backendUrlInput.value.trim();
-  if (val) {
-    currentBackendUrl = val;
-    chrome.storage.local.set({ backendUrl: val });
-    log(`Updated backend URL to ${val}`);
-    checkBackend();
-  }
-});
+if (btnSaveUrl) {
+  btnSaveUrl.addEventListener('click', () => {
+    const val = backendUrlInput ? backendUrlInput.value.trim() : '';
+    if (val) {
+      currentBackendUrl = val;
+      chrome.storage.local.set({ backendUrl: val });
+      log(`Updated backend URL to ${val}`);
+      checkBackend();
+    }
+  });
+}
 
-btnRetryBackend.addEventListener('click', () => checkBackend());
+if (btnRetryBackend) {
+  btnRetryBackend.addEventListener('click', () => checkBackend());
+}
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 (async () => {
@@ -323,7 +327,9 @@ btnRetryBackend.addEventListener('click', () => checkBackend());
   if (saved.backendUrl) {
     currentBackendUrl = saved.backendUrl;
   }
-  backendUrlInput.value = currentBackendUrl;
+  if (backendUrlInput) {
+    backendUrlInput.value = currentBackendUrl;
+  }
 
   if (saved.lastParsedFields) {
     parsedFields = saved.lastParsedFields;
