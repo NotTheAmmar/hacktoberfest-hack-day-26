@@ -1,36 +1,52 @@
 /**
  * popup.js — Extension popup controller
  *
- * Responsibilities:
- *  - Check if the active tab is a Google Form
- *  - Check backend health (localhost:8000)
- *  - Send "extract" message to the service worker → content script
- *  - Open the interview UI in a new tab
- *  - Trigger "fill" from backend autofill data
+ * Implements Kaggle Backend Schema:
+ *   1. POST /api/v1/parse-fields  { url: currentTabUrl }
+ *   2. POST /api/v1/process-audio { audio_file, fields_json }
+ *   3. Autofill Google Form via entry.XXXX mapping
+ * Also supports launching the in-page Floating Interview Panel.
  */
 
-const BACKEND = 'http://localhost:8000';
+// Default backend: uses chrome.storage or fallback to localhost
+let currentBackendUrl = 'http://localhost:8000';
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
-const statusBanner    = document.getElementById('status-banner');
-const statusText      = document.getElementById('status-text');
-const backendIndicator= document.getElementById('backend-indicator');
-const backendTextEl   = document.getElementById('backend-text');
-const btnRetryBackend = document.getElementById('btn-retry-backend');
-const formTitleText   = document.getElementById('form-title-text');
-const formQuestionCount = document.getElementById('form-question-count');
-const btnExtract      = document.getElementById('btn-extract');
-const btnOpenUI       = document.getElementById('btn-open-ui');
-const btnFill         = document.getElementById('btn-fill');
-const fillProgress    = document.getElementById('fill-progress');
-const progressFill    = document.getElementById('progress-fill');
-const progressText    = document.getElementById('progress-text');
-const logEl           = document.getElementById('log');
+const statusBanner       = document.getElementById('status-banner');
+const statusText         = document.getElementById('status-text');
+const backendUrlInput    = document.getElementById('backend-url-input');
+const btnSaveUrl         = document.getElementById('btn-save-url');
+const backendIndicator   = document.getElementById('backend-indicator');
+const backendTextEl      = document.getElementById('backend-text');
+const btnRetryBackend    = document.getElementById('btn-retry-backend');
+const formTitleText      = document.getElementById('form-title-text');
+const formQuestionCount  = document.getElementById('form-question-count');
+
+const btnParseFields     = document.getElementById('btn-parse-fields');
+const btnRecordAudio     = document.getElementById('btn-record-audio');
+const micLabel           = document.getElementById('mic-label');
+const btnOpenPanel       = document.getElementById('btn-open-panel');
+const btnFill            = document.getElementById('btn-fill');
+
+const resultBox          = document.getElementById('result-box');
+const transcriptPreview  = document.getElementById('transcript-preview');
+const mappedPreview      = document.getElementById('mapped-preview');
+
+const fillProgress       = document.getElementById('fill-progress');
+const progressFill       = document.getElementById('progress-fill');
+const progressText       = document.getElementById('progress-text');
+const logEl              = document.getElementById('log');
 
 // ── State ─────────────────────────────────────────────────────────────────────
-let isGoogleForm = false;
-let backendOk    = false;
-let schemaLoaded = false;
+let activeTabUrl   = '';
+let isGoogleForm   = false;
+let backendHealthy = false;
+let parsedFields   = [];          // [{ id: "entry.123", label: "Full Name" }]
+let mappedEntries  = {};          // { "entry.123": "Value" }
+
+let mediaRecorder  = null;
+let audioChunks    = [];
+let isRecording    = false;
 
 // ── Logging ───────────────────────────────────────────────────────────────────
 function log(msg, type = 'info') {
@@ -38,36 +54,37 @@ function log(msg, type = 'info') {
   entry.className = `log-entry ${type}`;
   entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
   logEl.prepend(entry);
-  // Keep only last 20 lines
-  while (logEl.children.length > 20) logEl.removeChild(logEl.lastChild);
+  while (logEl.children.length > 25) logEl.removeChild(logEl.lastChild);
 }
 
-// ── Update button states ──────────────────────────────────────────────────────
+// ── Button States ─────────────────────────────────────────────────────────────
 function updateButtons() {
-  btnExtract.disabled = !(isGoogleForm && backendOk);
-  btnOpenUI.disabled  = !backendOk;
-  btnFill.disabled    = !(isGoogleForm && backendOk && schemaLoaded);
+  btnParseFields.disabled = !(isGoogleForm && backendHealthy);
+  btnRecordAudio.disabled = !(parsedFields.length > 0 && backendHealthy);
+  if (btnOpenPanel) {
+    btnOpenPanel.disabled = !isGoogleForm;
+  }
+  btnFill.disabled        = !(isGoogleForm && Object.keys(mappedEntries).length > 0);
 }
 
-// ── Check if active tab is a Google Form ─────────────────────────────────────
+// ── Check active tab ──────────────────────────────────────────────────────────
 async function checkActiveTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab) return;
 
-  const url = tab.url || '';
-  if (url.match(/^https:\/\/docs\.google\.com\/forms\//)) {
+  activeTabUrl = tab.url || '';
+  if (activeTabUrl.match(/^https:\/\/(docs\.google\.com\/forms|forms\.gle)\//)) {
     isGoogleForm = true;
     statusBanner.className = 'status-banner status-ok';
     statusText.textContent = 'Google Form detected';
-    // Try to get form title from tab title
-    const title = tab.title || 'Untitled Form';
+    const title = tab.title || 'Google Form';
     formTitleText.textContent = title.replace(' - Google Forms', '').trim();
   } else {
     isGoogleForm = false;
     statusBanner.className = 'status-banner status-none';
-    statusText.textContent = 'No Google Form detected on this tab';
+    statusText.textContent = 'No Google Form detected on active tab';
     formTitleText.textContent = '—';
-    formQuestionCount.textContent = '0 questions';
+    formQuestionCount.textContent = '0 fields';
   }
   updateButtons();
 }
@@ -75,130 +92,241 @@ async function checkActiveTab() {
 // ── Check backend health ──────────────────────────────────────────────────────
 async function checkBackend() {
   backendIndicator.className = 'indicator indicator-checking';
-  backendTextEl.textContent = 'Connecting to localhost:8000…';
+  backendTextEl.textContent = 'Testing connection…';
 
   try {
-    const res = await fetch(`${BACKEND}/api/health`, { signal: AbortSignal.timeout(3000) });
-    const data = await res.json();
-    backendOk = true;
-    backendIndicator.className = 'indicator indicator-ok';
-    backendTextEl.textContent = `Backend ready (${data.whisper_model ?? 'whisper'})`;
-
-    // Check if a schema is already loaded
-    try {
-      const sr = await fetch(`${BACKEND}/api/form-schema`);
-      if (sr.ok) {
-        const schema = await sr.json();
-        if (schema?.questions?.length) {
-          schemaLoaded = true;
-          formQuestionCount.textContent = `${schema.questions.length} questions`;
-        }
+    const baseUrl = currentBackendUrl.replace(/\/+$/, '');
+    const res = await fetch(`${baseUrl}/api/health`, { signal: AbortSignal.timeout(3500) }).catch(() => null);
+    
+    if (res && res.ok) {
+      backendHealthy = true;
+      backendIndicator.className = 'indicator indicator-ok';
+      backendTextEl.textContent = `Connected (${baseUrl})`;
+    } else {
+      const ping = await fetch(baseUrl, { method: 'HEAD', signal: AbortSignal.timeout(3500) }).catch(() => null);
+      if (ping || res) {
+        backendHealthy = true;
+        backendIndicator.className = 'indicator indicator-ok';
+        backendTextEl.textContent = `Endpoint reachable: ${baseUrl}`;
+      } else {
+        throw new Error('Connection failed');
       }
-    } catch { /* no schema yet */ }
-
+    }
   } catch {
-    backendOk = false;
+    backendHealthy = false;
     backendIndicator.className = 'indicator indicator-error';
-    backendTextEl.textContent = 'Cannot reach localhost:8000';
-    log('Backend unreachable — is the server running?', 'error');
+    backendTextEl.textContent = 'Cannot reach backend URL';
+    log('Could not connect to backend. Check your ngrok or local URL.', 'error');
   }
 
   updateButtons();
 }
 
-// ── Extract form ──────────────────────────────────────────────────────────────
-btnExtract.addEventListener('click', async () => {
-  btnExtract.disabled = true;
-  btnExtract.textContent = 'Extracting…';
-  log('Sending extract command…');
+// ── Step 1: Parse Form Fields ─────────────────────────────────────────────────
+btnParseFields.addEventListener('click', async () => {
+  btnParseFields.disabled = true;
+  btnParseFields.textContent = 'Parsing fields…';
+  log(`Requesting /api/v1/parse-fields for active tab…`);
+
+  const baseUrl = currentBackendUrl.replace(/\/+$/, '');
 
   try {
-    const response = await chrome.runtime.sendMessage({ type: 'EXTRACT_FORM' });
+    const res = await fetch(`${baseUrl}/api/v1/parse-fields`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: activeTabUrl }),
+    });
 
-    if (response?.success) {
-      const schema = response.schema;
-      schemaLoaded = true;
-      formTitleText.textContent = schema.form_title || 'Untitled Form';
-      formQuestionCount.textContent = `${schema.questions?.length ?? 0} questions`;
-      log(`Extracted ${schema.questions?.length ?? 0} questions`, 'success');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Parse failed: HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    if (data.status === 'success' && Array.isArray(data.fields)) {
+      parsedFields = data.fields;
+      formQuestionCount.textContent = `${parsedFields.length} fields`;
+      log(`Successfully parsed ${parsedFields.length} form fields!`, 'success');
+      
+      chrome.storage.local.set({ lastParsedFields: parsedFields });
     } else {
-      log(`Extraction failed: ${response?.error ?? 'unknown error'}`, 'error');
+      throw new Error('Invalid response structure from /parse-fields');
     }
   } catch (err) {
-    log(`Error: ${err.message}`, 'error');
+    log(`Parse error: ${err.message}`, 'error');
   } finally {
-    btnExtract.textContent = 'Extract Form';
+    btnParseFields.textContent = '1. Parse Form Fields';
     updateButtons();
   }
 });
 
-// ── Open Interview Panel (injected into the Google Form page) ────────────────
-btnOpenUI.addEventListener('click', async () => {
-  btnOpenUI.disabled = true;
-  btnOpenUI.textContent = 'Opening…';
-  log('Injecting interview panel on the form…');
+// ── Open Floating Interview Panel (injected into the Google Form page) ────────
+if (btnOpenPanel) {
+  btnOpenPanel.addEventListener('click', async () => {
+    btnOpenPanel.disabled = true;
+    log('Injecting floating interview panel on the form…');
 
-  try {
-    const res = await chrome.runtime.sendMessage({ type: 'OPEN_PANEL' });
-    if (res?.success) {
-      log('Panel opened on the form page ✓', 'success');
-      window.close(); // close popup so panel is visible
-    } else {
-      log(`Failed: ${res?.error ?? 'unknown error'}`, 'error');
-      btnOpenUI.disabled = false;
-      btnOpenUI.textContent = 'Open Interview';
+    try {
+      const res = await chrome.runtime.sendMessage({ type: 'OPEN_PANEL' });
+      if (res?.success) {
+        log('Panel opened on the form page ✓', 'success');
+        window.close(); // close popup so panel is visible
+      } else {
+        log(`Failed to open panel: ${res?.error ?? 'unknown error'}`, 'error');
+        btnOpenPanel.disabled = false;
+      }
+    } catch (err) {
+      log(`Panel error: ${err.message}`, 'error');
+      btnOpenPanel.disabled = false;
     }
-  } catch (err) {
-    log(`Error: ${err.message}`, 'error');
-    btnOpenUI.disabled = false;
-    btnOpenUI.textContent = 'Open Interview';
+  });
+}
+
+// ── Step 2: Record Audio via MediaRecorder & Process via /process-audio ───────
+btnRecordAudio.addEventListener('click', async () => {
+  if (isRecording) {
+    stopRecording();
+  } else {
+    await startRecording();
   }
 });
 
-// ── Fill form ─────────────────────────────────────────────────────────────────
+async function startRecording() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioChunks = [];
+    mediaRecorder = new MediaRecorder(stream);
+
+    mediaRecorder.ondataavailable = e => {
+      if (e.data.size > 0) audioChunks.push(e.data);
+    };
+
+    mediaRecorder.onstop = async () => {
+      stream.getTracks().forEach(track => track.stop());
+      const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+      await processAudioWithKaggle(audioBlob);
+    };
+
+    mediaRecorder.start();
+    isRecording = true;
+    btnRecordAudio.classList.add('recording');
+    micLabel.textContent = 'Recording… Click to Stop & Send';
+    log('Recording audio… speak your answers clearly.', 'info');
+  } catch (err) {
+    log(`Microphone access error: ${err.message}`, 'error');
+  }
+}
+
+function stopRecording() {
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
+  }
+  isRecording = false;
+  btnRecordAudio.classList.remove('recording');
+  micLabel.textContent = 'Processing Whisper + Gemma 4…';
+  btnRecordAudio.disabled = true;
+}
+
+async function processAudioWithKaggle(audioBlob) {
+  log('Sending audio to /api/v1/process-audio…', 'info');
+  const baseUrl = currentBackendUrl.replace(/\/+$/, '');
+
+  const formData = new FormData();
+  formData.append('audio_file', audioBlob, 'recording.webm');
+  formData.append('fields_json', JSON.stringify(parsedFields));
+
+  try {
+    const res = await fetch(`${baseUrl}/api/v1/process-audio`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Audio processing failed with HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    if (data.status === 'success') {
+      mappedEntries = data.mapped_entries || {};
+      const transcript = data.transcript || '';
+
+      resultBox.classList.remove('hidden');
+      transcriptPreview.textContent = `"${transcript}"`;
+      mappedPreview.textContent = JSON.stringify(mappedEntries, null, 2);
+
+      log(`Transcribed: "${transcript.substring(0, 50)}…"`, 'success');
+      log(`Mapped ${Object.keys(mappedEntries).length} entries with Gemma 4!`, 'success');
+
+      chrome.storage.local.set({ lastMappedEntries: mappedEntries });
+    } else {
+      throw new Error('Unexpected response format from /process-audio');
+    }
+  } catch (err) {
+    log(`Process error: ${err.message}`, 'error');
+  } finally {
+    micLabel.textContent = '2. Record Audio Response';
+    btnRecordAudio.disabled = false;
+    updateButtons();
+  }
+}
+
+// ── Step 3: Fill Google Form via Content Script ────────────────────────────────
 btnFill.addEventListener('click', async () => {
   btnFill.disabled = true;
   fillProgress.classList.remove('hidden');
-  log('Fetching autofill data…');
+  progressFill.style.width = '30%';
+  log('Autofilling Google Form fields…', 'info');
 
   try {
-    // 1. Get validated answers from backend
-    const res = await fetch(`${BACKEND}/api/autofill-data`);
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail ?? 'Failed to fetch autofill data');
-    }
-    const autofillData = await res.json();
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) throw new Error('No active tab found');
 
-    log(`Filling ${Object.keys(autofillData.answers ?? {}).length} fields…`);
-
-    // 2. Send to service worker → content script
-    const fillRes = await chrome.runtime.sendMessage({
-      type: 'FILL_FORM',
-      payload: autofillData,
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: (entries) => window.__LWP_fillForm?.({ mapped_entries: entries }),
+      args: [mappedEntries],
     });
 
-    if (fillRes?.success) {
-      const filled = fillRes.filled ?? 0;
-      const total  = fillRes.total  ?? 0;
-      progressFill.style.width = '100%';
-      progressText.textContent = `Filled ${filled} / ${total} fields`;
-      log(`Autofill complete: ${filled}/${total} fields`, 'success');
-    } else {
-      throw new Error(fillRes?.error ?? 'Fill failed');
-    }
-
+    const res = results?.[0]?.result || { filled: 0, total: Object.keys(mappedEntries).length };
+    progressFill.style.width = '100%';
+    progressText.textContent = `Filled ${res.filled} / ${res.total} fields`;
+    log(`Autofill complete: ${res.filled} fields filled!`, 'success');
   } catch (err) {
-    log(`Fill error: ${err.message}`, 'error');
+    log(`Autofill error: ${err.message}`, 'error');
   } finally {
     updateButtons();
   }
 });
 
-// ── Retry backend ─────────────────────────────────────────────────────────────
+// ── URL Save & Storage ────────────────────────────────────────────────────────
+btnSaveUrl.addEventListener('click', () => {
+  const val = backendUrlInput.value.trim();
+  if (val) {
+    currentBackendUrl = val;
+    chrome.storage.local.set({ backendUrl: val });
+    log(`Updated backend URL to ${val}`);
+    checkBackend();
+  }
+});
+
 btnRetryBackend.addEventListener('click', () => checkBackend());
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 (async () => {
+  const saved = await chrome.storage.local.get(['backendUrl', 'lastParsedFields', 'lastMappedEntries']);
+  if (saved.backendUrl) {
+    currentBackendUrl = saved.backendUrl;
+  }
+  backendUrlInput.value = currentBackendUrl;
+
+  if (saved.lastParsedFields) {
+    parsedFields = saved.lastParsedFields;
+    formQuestionCount.textContent = `${parsedFields.length} fields`;
+  }
+  if (saved.lastMappedEntries) {
+    mappedEntries = saved.lastMappedEntries;
+  }
+
   await Promise.all([checkActiveTab(), checkBackend()]);
 })();

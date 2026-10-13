@@ -4,9 +4,9 @@
 
 ## Elevator Pitch
 
-Local Whisper Paperwork is an AI assistant that **reads an online form, interviews you about the required information, validates your answers, and fills the form automatically** — all running locally on your machine.
+Local Whisper Paperwork is an AI assistant that **reads an online form, interviews you about the required information, validates your answers, and fills the form automatically** — powered by Whisper for voice recognition and **Gemma 4** for natural language understanding and field mapping.
 
-Instead of manually typing into dozens of fields, you have a natural conversation. The AI understands the form so you don't have to.
+Instead of manually typing into dozens of fields, you have a natural conversation or provide a single voice note. The AI understands the form so you don't have to.
 
 ## The Problem
 
@@ -16,20 +16,19 @@ Online forms are tedious:
 - Strict format requirements (dates, phone numbers, IDs)
 - Easy to miss required fields or make typos
 
-Existing voice dictation tools can transcribe speech, but they **cannot understand a form's structure**, conduct a guided interview, validate responses, or map answers to the correct fields.
+Existing voice dictation tools can transcribe speech, but they **cannot understand a form's structure**, conduct a guided interview, validate responses, or map answers to the correct `entry.XXXX` fields.
 
 ## The Solution
 
-A six-stage pipeline that turns form-filling into a conversation:
+A streamlined pipeline that turns form-filling into voice-guided automation:
 
 ```
 Active Google Form
-    → Question extraction (Chrome Extension)
-    → Structured form schema (JSON)
-    → AI-guided interview (Gemma 2 via Kaggle/ngrok)
-    → Voice/text answers (Faster-Whisper local STT)
-    → Validation & review
-    → Chrome autofill
+    → Form Fields Extraction via Chrome Extension or POST /api/v1/parse-fields
+    → Speech Audio Input via Extension or Local Interface
+    → Whisper STT + Gemma 4 Field Mapping (POST /api/v1/process-audio)
+    → Structured Field Mapping ({ "entry.XXXX": "value" })
+    → Autofill directly into Google Form DOM
     → Manual submission by user
 ```
 
@@ -37,28 +36,25 @@ Active Google Form
 
 | Principle | Implementation |
 |---|---|
-| **AI understands the form** | Gemma 2 interprets questions, instructions, and field types |
-| **User answers naturally** | Voice-first with text fallback, one question at a time |
-| **Privacy by default** | Local STT, local processing, no external AI APIs |
-| **User stays in control** | Review screen before autofill, manual submission only |
-| **Existing browser session** | Chrome extension works in the user's active tab |
+| **AI understands the form** | **Gemma 4** interprets questions, instructions, and maps user speech to form entry IDs |
+| **User answers naturally** | Voice-first with text fallback, single-note or interview format |
+| **Privacy by default** | Open-source Whisper STT + dedicated Gemma 4 Kaggle runtime |
+| **User stays in control** | Preview transcripts and mapped entries before autofill; manual submission only |
+| **Existing browser session** | Chrome extension works directly in the active Google Forms tab |
 
 ## Key Features
 
-- 🎙️ Voice-first and text-based interaction
-- 📋 Automatic extraction of form questions and instructions
-- 💬 One-question-at-a-time conversational interview
-- 🧠 Context-aware — reuses previously supplied answers
-- 🔒 Local speech transcription (Faster-Whisper)
-- 🤖 Gemma 2 inference (hosted on Kaggle, accessed via ngrok)
-- ✅ Structured answer validation and missing-field warnings
+- 🎙️ Voice-first interaction using Whisper speech recognition
+- 📋 Direct extraction of form `entry.XXXX` IDs and questions
+- 🤖 **Gemma 4** intelligence for context understanding and answer extraction
+- ⚡ 1-click audio processing and mapping via Kaggle ngrok API
 - 📝 Editable review screen before autofill
-- 🌐 Works with the user's existing Chrome session
-- 🚫 Never submits a form automatically
+- 🌐 Native Google Forms DOM filling with input and event dispatching
+- 🚫 Never submits a form automatically — user verifies and submits
 
 ## Target Demo
 
-**Hacktoberfest 2026 Team Registration Form** — demonstrating voice interview through to a completed, manually submitted Google Form.
+**Hacktoberfest 2026 Team Registration Form** — demonstrating audio recording, Whisper transcription, Gemma 4 mapping, and completed autofill in the user's active Chrome tab.
 
 ---
 

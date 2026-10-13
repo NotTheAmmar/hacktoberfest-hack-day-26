@@ -31,6 +31,7 @@ load_dotenv()
 from routers import form as form_router
 from routers import interview as interview_router
 from routers import autofill as autofill_router
+from routers import kaggle_api as kaggle_router
 from services.stt import stt_service
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -97,6 +98,7 @@ app.add_middleware(
 app.include_router(form_router.router)
 app.include_router(interview_router.router)
 app.include_router(autofill_router.router)
+app.include_router(kaggle_router.router)
 
 # ── Health check ──────────────────────────────────────────────────────────────
 @app.get("/api/health", tags=["system"])

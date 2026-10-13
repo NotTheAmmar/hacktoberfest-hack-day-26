@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Local Whisper Paperwork",
-  "version": "0.1.0",
-  "description": "Voice-guided AI form-filling assistant. Extracts Google Form questions, interviews you, and autofills the answers.",
+  "version": "0.2.0",
+  "description": "Voice-guided AI form-filling assistant powered by Whisper + Gemma 4. Scrapes Google Forms, records audio, and autofills answers directly.",
 
   "permissions": [
     "activeTab",
@@ -11,7 +11,9 @@
   ],
 
   "host_permissions": [
-    "https://docs.google.com/forms/*",
+    "https://*.ngrok-free.app/*",
+    "https://docs.google.com/*",
+    "https://forms.gle/*",
     "http://localhost/*"
   ],
 
@@ -33,7 +35,10 @@
 
   "content_scripts": [
     {
-      "matches": ["https://docs.google.com/forms/*"],
+      "matches": [
+        "https://docs.google.com/forms/*",
+        "https://forms.gle/*"
+      ],
       "js": ["content/extractor.js", "content/filler.js"],
       "run_at": "document_idle"
     }

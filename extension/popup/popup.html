@@ -15,58 +15,85 @@
         <line x1="12" y1="19" x2="12" y2="22"/>
         <line x1="8" y1="22" x2="16" y2="22"/>
       </svg>
-      <span>Whisper Paperwork</span>
+      <span>Whisper + Gemma 4</span>
     </div>
   </header>
 
   <!-- Status Banner -->
   <div id="status-banner" class="status-banner status-checking">
     <div class="status-dot"></div>
-    <span id="status-text">Checking page...</span>
+    <span id="status-text">Checking active tab...</span>
   </div>
 
-  <!-- Backend Connection -->
+  <!-- Backend Configuration -->
   <div class="section">
-    <div class="section-label">Backend</div>
-    <div class="backend-row">
+    <div class="section-label">Backend URL</div>
+    <div class="input-url-row">
+      <input type="text" id="backend-url-input" placeholder="https://<ngrok-id>.ngrok-free.app or localhost:8000" />
+      <button id="btn-save-url" class="btn-icon" title="Save URL">💾</button>
+    </div>
+    <div class="backend-row" style="margin-top: 6px;">
       <div id="backend-indicator" class="indicator indicator-checking"></div>
-      <span id="backend-text">Connecting to localhost:8000…</span>
-      <button id="btn-retry-backend" class="btn-icon" title="Retry connection">↺</button>
+      <span id="backend-text">Checking backend…</span>
+      <button id="btn-retry-backend" class="btn-icon" title="Refresh status">↺</button>
     </div>
   </div>
 
-  <!-- Form Detection Section -->
+  <!-- Form Fields Section -->
   <div class="section" id="section-form">
-    <div class="section-label">Google Form</div>
+    <div class="section-label">Google Form Fields</div>
     <div id="form-info" class="form-info">
       <span id="form-title-text" class="form-title-text">—</span>
-      <span id="form-question-count" class="badge">0 questions</span>
+      <span id="form-question-count" class="badge">0 fields</span>
     </div>
   </div>
 
   <!-- Actions -->
   <div class="actions">
-    <button id="btn-extract" class="btn btn-primary" disabled>
+    <!-- 1. Parse Fields -->
+    <button id="btn-parse-fields" class="btn btn-primary" disabled>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <polyline points="8 17 12 21 16 17"/>
         <line x1="12" y1="21" x2="12" y2="3"/>
       </svg>
-      Extract Form
+      1. Parse Form Fields
     </button>
 
-    <button id="btn-open-ui" class="btn btn-secondary" disabled>
+    <!-- 2. Record & Process Audio -->
+    <button id="btn-record-audio" class="btn btn-secondary" disabled>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+        <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+        <line x1="12" y1="19" x2="12" y2="22"/>
+        <line x1="8" y1="22" x2="16" y2="22"/>
       </svg>
-      Open Interview
+      <span id="mic-label">2. Record Audio Response</span>
     </button>
 
+    <!-- Floating Interview Panel Button -->
+    <button id="btn-open-panel" class="btn btn-secondary" style="background: var(--surface2);">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+        <line x1="9" y1="3" x2="9" y2="21"/>
+      </svg>
+      Open Floating Panel
+    </button>
+
+    <!-- 3. Fill Form -->
     <button id="btn-fill" class="btn btn-success" disabled>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <polyline points="20 6 9 17 4 12"/>
       </svg>
-      Fill Form
+      3. Fill Form Fields
     </button>
+  </div>
+
+  <!-- Transcript / Result Box -->
+  <div id="result-box" class="result-box hidden">
+    <div class="result-title">Transcript:</div>
+    <div id="transcript-preview" class="transcript-preview"></div>
+    <div class="result-title" style="margin-top: 6px;">Mapped Entries:</div>
+    <div id="mapped-preview" class="mapped-preview"></div>
   </div>
 
   <!-- Progress Bar (shown during fill) -->
@@ -79,7 +106,6 @@
 
   <!-- Log -->
   <div id="log" class="log"></div>
-
 
   <script src="popup.js"></script>
 </body>

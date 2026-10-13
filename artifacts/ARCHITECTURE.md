@@ -3,43 +3,33 @@
 ## High-Level Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        USER'S BROWSER                          │
-│  ┌──────────────────┐    ┌──────────────────────────────────┐  │
-│  │   Google Form     │    │   Chrome Extension (MV3)         │  │
-│  │   (Active Tab)    │◄──►│   - Content Script (DOM access)  │  │
-│  │                   │    │   - Service Worker (background)  │  │
-│  │                   │    │   - Extension Popup (controls)   │  │
-│  └──────────────────┘    └──────────┬───────────────────────┘  │
-│                                      │                          │
-└──────────────────────────────────────│──────────────────────────┘
-                                       │ HTTP (localhost)
-                                       ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                     LOCAL PYTHON BACKEND                         │
-│  ┌──────────────────┐  ┌──────────────┐  ┌───────────────────┐  │
-│  │  FastAPI Server   │  │  Interview   │  │  Form Schema      │  │
-│  │  (localhost:8000) │  │  Engine      │  │  Manager          │  │
-│  │  - REST API       │  │  - Q&A flow  │  │  - Parse schema   │  │
-│  │  - WebSocket      │  │  - Context   │  │  - Validate       │  │
-│  │  - CORS config    │  │  - History   │  │  - Map answers    │  │
-│  └────────┬─────────┘  └──────┬───────┘  └───────────────────┘  │
-│           │                    │                                  │
-│  ┌────────▼─────────┐  ┌──────▼───────┐                         │
-│  │  Faster-Whisper   │  │  Gemma 2     │                         │
-│  │  (Local STT)      │  │  Client      │                         │
-│  │  - Audio → Text   │  │  (via ngrok) │                         │
-│  │  - Local model    │  │              │                         │
-│  └──────────────────┘  └──────┬───────┘                         │
-│                                │                                  │
-└────────────────────────────────│──────────────────────────────────┘
-                                 │ HTTPS (ngrok tunnel)
-                                 ▼
-                    ┌──────────────────────┐
-                    │   Kaggle Notebook    │
-                    │   - Gemma 2 model    │
-                    │   - Inference API    │
-                    └──────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│                        USER'S BROWSER (Chrome)                        │
+│  ┌─────────────────────────┐     ┌──────────────────────────────────┐  │
+│  │   Google Form           │     │   Chrome Extension (MV3)         │  │
+│  │   (Active Tab)          │◄───►│   - Content Script (filler/DOM)  │  │
+│  │   https://docs.google...│     │   - Extension Popup (Audio Rec)  │  │
+│  └─────────────────────────┘     └──────────────┬───────────────────┘  │
+│                                                 │                      │
+└─────────────────────────────────────────────────│──────────────────────┘
+                                                  │
+                      Direct ngrok API / Local    │
+                      (Configurable in popup)     │
+                                                  ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│              KAGGLE BACKEND / LOCAL BACKEND (FastAPI)                  │
+│                                                                        │
+│   POST /api/v1/parse-fields                                            │
+│   ├─ Scrapes active Google Form URL                                    │
+│   └─ Returns fields: [{ id: "entry.123", label: "Full Name" }]         │
+│                                                                        │
+│   POST /api/v1/process-audio                                           │
+│   ├─ Accepts audio_file + fields_json                                  │
+│   ├─ Whisper Speech-to-Text (STT)                                      │
+│   ├─ Gemma 4 Field-Mapping LLM                                         │
+│   └─ Returns transcript + mapped_entries: { "entry.123": "Value" }     │
+│                                                                        │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Component Breakdown
@@ -48,173 +38,43 @@
 
 | Component | Responsibility |
 |---|---|
-| **Content Script** | Injected into Google Forms tabs. Reads the DOM to extract form structure (questions, options, types, required indicators). Receives autofill commands and writes values into form fields. |
-| **Service Worker** | Background script that manages extension state, coordinates between content script and popup, and communicates with the local backend via HTTP. |
-| **Extension Popup** | Simple UI with "Extract Form" and "Fill Form" buttons. Shows extraction status and connection health. |
+| **Extension Popup** | Allows user to input the active Kaggle ngrok URL, triggers `1. Parse Form Fields`, records audio via MediaRecorder, sends to `/api/v1/process-audio`, and triggers `3. Fill Form Fields`. |
+| **Content Script (`filler.js`)** | Injected into Google Forms tabs. Directly fills inputs matching `[name="entry.XXXX"]` or container IDs and dispatches standard `input`, `change`, and `blur` events so Google Forms registers the answers. |
+| **Service Worker (`service-worker.js`)** | Background coordinator for script execution and tab state management. |
 
-### 2. Local Python Backend (FastAPI)
+### 2. Kaggle Backend (Gemma 4 + Whisper)
 
-| Module | Responsibility |
-|---|---|
-| **API Server** | Exposes REST endpoints for form schema upload, interview interaction, and autofill data retrieval. Serves the interview web UI. WebSocket for real-time interview updates. |
-| **Form Schema Manager** | Parses the extracted form JSON into an internal schema. Identifies field types, validation rules, required fields, and instructions. |
-| **Interview Engine** | Orchestrates the one-at-a-time question flow. Maintains conversation context and answer state. Calls Gemma 2 for question generation, answer interpretation, and validation. |
-| **STT Module** | Wraps Faster-Whisper for local speech-to-text. Receives audio blobs, returns transcribed text. |
-| **Gemma Client** | HTTP client that sends prompts to the Gemma 2 model hosted on Kaggle via ngrok. Handles prompt formatting, response parsing, and error recovery. |
+| Endpoint | Method | Request | Response |
+|---|---|---|---|
+| `/api/v1/parse-fields` | `POST` | `{"url": "https://docs.google.com/forms/..."}` | `{"status": "success", "fields": [{"id": "entry.123", "label": "Full Name"}]}` |
+| `/api/v1/process-audio` | `POST` | `multipart/form-data`: `audio_file` + `fields_json` | `{"status": "success", "transcript": "...", "mapped_entries": {"entry.123": "Ammar"}}` |
 
-### 3. Interview Web UI
+### 3. Local Python Backend (`backend/`)
 
-A lightweight local web page (HTML/CSS/JS) served by the backend:
-- Displays the current question with context
-- Microphone button for voice recording
-- Text input fallback
-- Answer history and progress indicator
-- Review/edit screen before autofill
-- "Fill Form" trigger button
+Provides a local development server mirroring the Kaggle API contract (`/api/v1/parse-fields` and `/api/v1/process-audio`), plus an optional full-screen conversational interview UI.
 
-### 4. Gemma 2 on Kaggle
-
-- Runs in a Kaggle notebook with GPU
-- Exposed via ngrok tunnel
-- Provides a simple inference API (prompt in → response out)
-- ngrok URL configured via `.env` file in the project
-
-## Data Flow
-
-### Form Extraction Flow
-```
-Google Form DOM
-    → Content Script parses questions, labels, types, options
-    → Structured JSON schema
-    → Sent to backend via POST /api/form-schema
-    → Backend stores and analyzes schema
-```
-
-### Interview Flow
-```
-Backend selects next question (via Gemma 2)
-    → Displayed in Interview UI
-    → User responds (voice → Faster-Whisper → text, or typed text)
-    → Answer sent to backend POST /api/answer
-    → Gemma 2 interprets and validates answer
-    → Answer stored in structured response map
-    → Next question selected
-    → Repeat until all required fields answered
-```
-
-### Autofill Flow
-```
-User reviews all answers in review screen
-    → User clicks "Fill Form"
-    → Backend sends answer map to extension via GET /api/autofill-data
-    → Extension service worker forwards to content script
-    → Content script maps answers to DOM fields
-    → Fields filled programmatically
-    → User reviews and submits manually
-```
-
-## API Endpoints
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/api/form-schema` | Upload extracted form schema from extension |
-| `GET` | `/api/interview/next` | Get the next interview question |
-| `POST` | `/api/interview/answer` | Submit an answer (text) |
-| `POST` | `/api/interview/voice` | Submit voice recording for STT + answer |
-| `GET` | `/api/interview/status` | Get interview progress and answer summary |
-| `GET` | `/api/autofill-data` | Get validated answer map for autofill |
-| `POST` | `/api/interview/edit` | Edit a previous answer |
-| `GET` | `/api/health` | Health check |
-| `WS` | `/ws/interview` | Real-time interview updates (optional) |
-
-## Form Schema Format
-
-```json
-{
-  "form_title": "Hacktoberfest 2026 Team Registration",
-  "form_description": "Register your team for the hackathon...",
-  "questions": [
-    {
-      "id": "q1",
-      "label": "Team Name",
-      "type": "short_text",
-      "required": true,
-      "instructions": "Enter your team name (max 50 characters)",
-      "options": null,
-      "validation": {
-        "max_length": 50
-      }
-    },
-    {
-      "id": "q2",
-      "label": "Competition Track",
-      "type": "radio",
-      "required": true,
-      "instructions": "Select the track you're competing in",
-      "options": ["AI/ML", "Web Dev", "Mobile", "Open Innovation"],
-      "validation": null
-    },
-    {
-      "id": "q3",
-      "label": "Team Members",
-      "type": "checkbox",
-      "required": false,
-      "instructions": "Select all roles present in your team",
-      "options": ["Developer", "Designer", "PM", "Other"],
-      "validation": null
-    }
-  ]
-}
-```
-
-## Answer Map Format
-
-```json
-{
-  "answers": {
-    "q1": {
-      "value": "Code Crusaders",
-      "confidence": "high",
-      "source": "voice",
-      "validated": true
-    },
-    "q2": {
-      "value": "AI/ML",
-      "confidence": "high",
-      "source": "text",
-      "validated": true
-    }
-  },
-  "completion": {
-    "total_questions": 10,
-    "answered": 7,
-    "required_remaining": 1,
-    "optional_remaining": 2
-  }
-}
-```
-
-## Security Boundaries
+## End-to-End Data Flow
 
 ```
-┌─────────────────────────────────────────────┐
-│ TRUSTED ZONE (User's Machine)               │
-│                                              │
-│  Chrome Extension ←→ localhost:8000 only     │
-│  Faster-Whisper (fully local)                │
-│  Audio recordings (never leave device)       │
-│  Answer data (local until autofill)          │
-│                                              │
-├─────────────────────────────────────────────┤
-│ EXTERNAL (via ngrok)                         │
-│                                              │
-│  Gemma 2 prompts (form questions + answers)  │
-│  Note: No raw audio sent externally          │
-│                                              │
-├─────────────────────────────────────────────┤
-│ GOOGLE (user-initiated)                      │
-│                                              │
-│  Form submission (manual, by user)           │
-│                                              │
-└─────────────────────────────────────────────┘
+1. Active Google Form Tab
+   → Popup gets tab URL
+   → POST /api/v1/parse-fields { url }
+   → Receives [{ id: "entry.123456789", label: "Full Name" }, ...]
+
+2. Audio Recording
+   → User clicks "Record Audio Response" in extension popup
+   → User speaks answers naturally
+   → MediaRecorder captures audio blob
+
+3. Whisper + Gemma 4 Processing
+   → POST /api/v1/process-audio { audio_file, fields_json }
+   → Whisper transcribes audio to text
+   → Gemma 4 maps text entities to corresponding entry IDs
+   → Returns transcript + { "entry.123456789": "Ammar", ... }
+
+4. Autofill & Review
+   → User clicks "Fill Form Fields"
+   → filler.js targets document.querySelector(`[name="entry.XXXX"]`)
+   → Native DOM events triggered
+   → User inspects completed form and submits manually
 ```

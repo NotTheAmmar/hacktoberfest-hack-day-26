@@ -2,45 +2,40 @@
  * filler.js — Google Forms autofill content script
  *
  * Injected into docs.google.com/forms/* pages.
- * Exposes window.__LWP_fillForm(autofillData) which maps backend answers
- * to the correct DOM fields and programmatically fills them.
+ * Supports:
+ *   1. Direct Entry IDs mapping:
+ *      document.querySelector(`[name="${entryId}"]`) or [data-params] matching "entry.XXXX"
+ *   2. Question ID / Index mapping fallback
  *
- * Important: Google Forms detects DOM changes via React/Angular event handlers.
- * We must dispatch native input/change events after setting values so the form
- * registers the new values properly.
+ * Dispatches native input/change/blur events so Google Forms registers the inputs.
  */
 
 (function () {
   'use strict';
 
-  /**
-   * Dispatch the events Google Forms needs to register a changed value.
-   */
   function triggerEvents(element) {
     ['focus', 'input', 'change', 'blur'].forEach(evtType => {
       element.dispatchEvent(new Event(evtType, { bubbles: true }));
     });
   }
 
-  /**
-   * Fill a short_text or paragraph field.
-   */
-  function fillText(container, value) {
-    const input = container.querySelector('input[type="text"], input:not([type]), textarea');
+  function setInputValue(input, value) {
     if (!input) return false;
     input.focus();
-    // Use execCommand for React-managed inputs (sets native input value)
     input.value = '';
-    input.focus();
-    document.execCommand?.('insertText', false, String(value));
-    // Fallback: direct assignment + events
+    
+    // React / Angular synthetic event handling
+    if (document.execCommand) {
+      try {
+        document.execCommand('insertText', false, String(value));
+      } catch (e) {}
+    }
+
     if (input.value !== String(value)) {
-      const nativeInputSetter = Object.getOwnPropertyDescriptor(
-        input.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype,
-        'value'
-      )?.set;
-      if (nativeInputSetter) {
-        nativeInputSetter.call(input, String(value));
+      const proto = input.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+      if (nativeSetter) {
+        nativeSetter.call(input, String(value));
       } else {
         input.value = String(value);
       }
@@ -50,210 +45,119 @@
   }
 
   /**
-   * Fill a radio button group.
-   * value: the option label string to select.
+   * Fills an entry using its Google Form entry.XXXX ID.
+   * Finds inputs with name="entry.XXXX", data-item-id, aria-labelledby, etc.
    */
-  function fillRadio(container, value) {
-    const radios = container.querySelectorAll('[role="radio"]');
-    for (const radio of radios) {
-      const label = radio.getAttribute('aria-label') || radio.textContent.trim();
-      if (label.toLowerCase() === String(value).toLowerCase()) {
-        radio.click();
-        return true;
-      }
-    }
-    // Fuzzy match: starts with or contains
-    for (const radio of radios) {
-      const label = (radio.getAttribute('aria-label') || radio.textContent.trim()).toLowerCase();
-      const target = String(value).toLowerCase();
-      if (label.startsWith(target) || label.includes(target)) {
-        radio.click();
-        return true;
-      }
-    }
-    console.warn('[LWP Filler] Radio option not found:', value);
-    return false;
-  }
+  function fillByEntryId(entryId, value) {
+    const cleanId = String(entryId).trim();
+    const strVal = String(value).trim();
 
-  /**
-   * Fill checkbox group.
-   * value: string or array of strings to check.
-   */
-  function fillCheckbox(container, value) {
-    const targets = Array.isArray(value)
-      ? value.map(v => String(v).toLowerCase())
-      : [String(value).toLowerCase()];
-
-    const checkboxes = container.querySelectorAll('[role="checkbox"]');
-    let filled = 0;
-
-    for (const cb of checkboxes) {
-      const label = (cb.getAttribute('aria-label') || cb.textContent.trim()).toLowerCase();
-      const shouldCheck = targets.some(t => label === t || label.includes(t));
-
-      if (shouldCheck) {
-        const isChecked = cb.getAttribute('aria-checked') === 'true';
-        if (!isChecked) {
-          cb.click();
-          filled++;
-        } else {
-          filled++; // already checked, counts as filled
-        }
-      }
-    }
-    return filled > 0;
-  }
-
-  /**
-   * Fill a dropdown / combobox.
-   * Opens the dropdown, clicks the matching option, closes it.
-   */
-  async function fillDropdown(container, value) {
-    // Find the combobox trigger
-    const trigger = container.querySelector('[role="combobox"], [role="listbox"]');
-    const nativeSelect = container.querySelector('select');
-
-    // Native select (simpler path)
-    if (nativeSelect) {
-      const target = String(value).toLowerCase();
-      for (const option of nativeSelect.options) {
-        if (option.text.trim().toLowerCase() === target) {
-          nativeSelect.value = option.value;
-          triggerEvents(nativeSelect);
+    // 1. Direct name match: <input name="entry.123456789">
+    let target = document.querySelector(`[name="${cleanId}"]`);
+    if (target) {
+      if (target.type === 'radio' || target.type === 'checkbox') {
+        // Radio / checkbox with matching value or aria-label
+        const matchingOpt = document.querySelector(`[name="${cleanId}"][value="${strVal}"]`) ||
+                            target.closest('[role="listitem"]')?.querySelector(`[aria-label*="${strVal}" i]`);
+        if (matchingOpt) {
+          matchingOpt.click();
           return true;
         }
       }
-      return false;
+      return setInputValue(target, strVal);
     }
 
-    if (!trigger) return false;
+    // 2. Search inside container matching entryId or numbers
+    const numId = cleanId.replace(/\D/g, '');
+    let container = null;
+    if (numId) {
+      container = document.querySelector(`[data-params*="${numId}"]`) ||
+                  document.querySelector(`[data-item-id="${numId}"]`);
+    }
 
-    // Open the dropdown
-    trigger.click();
-    await sleep(300);
+    if (container) {
+      const input = container.querySelector('input:not([type="hidden"]), textarea');
+      if (input) return setInputValue(input, strVal);
 
-    // Find and click the matching option
-    const options = document.querySelectorAll('[role="option"]');
-    const target = String(value).toLowerCase();
+      // Check for radio
+      const radio = container.querySelector(`[role="radio"][aria-label*="${strVal}" i]`) ||
+                    container.querySelector(`[role="radio"]`);
+      if (radio) {
+        radio.click();
+        return true;
+      }
 
-    for (const opt of options) {
-      const optText = (opt.getAttribute('data-value') || opt.textContent.trim()).toLowerCase();
-      if (optText === target || optText.includes(target)) {
-        opt.click();
+      // Check for checkbox
+      const checkbox = container.querySelector(`[role="checkbox"][aria-label*="${strVal}" i]`);
+      if (checkbox) {
+        checkbox.click();
         return true;
       }
     }
 
-    // Close dropdown if nothing matched
-    trigger.click();
-    console.warn('[LWP Filler] Dropdown option not found:', value);
     return false;
-  }
-
-  /**
-   * Fill a date field. value should be 'YYYY-MM-DD' or a recognizable date string.
-   */
-  function fillDate(container, value) {
-    const inputs = container.querySelectorAll('input[type="text"], input[type="number"]');
-    // Google Forms date fields render as separate month/day/year inputs
-    if (inputs.length >= 3) {
-      const date = new Date(value);
-      if (!isNaN(date)) {
-        const [month, day, year] = [
-          date.getMonth() + 1,
-          date.getDate(),
-          date.getFullYear(),
-        ];
-        // Order: Month, Day, Year (standard Google Forms layout)
-        const nativeMonthSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
-        [[inputs[0], month], [inputs[1], day], [inputs[2], year]].forEach(([inp, val]) => {
-          nativeMonthSetter?.call(inp, String(val));
-          triggerEvents(inp);
-        });
-        return true;
-      }
-    }
-    // Single input fallback
-    return fillText(container, value);
-  }
-
-  /**
-   * Find a question container by its data-lwp-id or by index fallback.
-   */
-  function findContainer(questionId, index) {
-    // First try: match by data-lwp-id set during extraction
-    const byId = document.querySelector(`[data-lwp-id="${questionId}"]`);
-    if (byId) return byId;
-
-    // Fallback: by index in the question list
-    const all = document.querySelectorAll(
-      '.freebirdFormviewerViewItemsItemItem, [role="listitem"]'
-    );
-    return all[index] || null;
-  }
-
-  /**
-   * Sleep helper.
-   */
-  function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   /**
    * Main fill function exposed on window.
-   * @param {Object} autofillData - { answers: { [questionId]: { value, type, index } } }
-   * @returns {{ filled: number, total: number, errors: string[] }}
+   * Accepts:
+   *   - mapped_entries object: { "entry.123": "Value", ... }
+   *   - OR standard payload: { mapped_entries: { ... } }
+   *   - OR schema format: { answers: { q0: { value, ... } } }
    */
-  window.__LWP_fillForm = async function (autofillData) {
-    const answers = autofillData?.answers ?? {};
-    const entries = Object.entries(answers);
-    const result = { filled: 0, total: entries.length, errors: [] };
+  window.__LWP_fillForm = async function (payload) {
+    const result = { filled: 0, total: 0, errors: [] };
+    const mappedEntries = payload?.mapped_entries || 
+                          (payload?.answers ? null : payload) || 
+                          {};
 
-    for (const [questionId, answerObj] of entries) {
-      const { value, type, index } = answerObj;
+    // Mode A: Entry ID based (Kaggle Backend schema)
+    if (mappedEntries && Object.keys(mappedEntries).length > 0) {
+      const entries = Object.entries(mappedEntries);
+      result.total = entries.length;
 
-      if (value === null || value === undefined || value === '') continue;
-
-      const container = findContainer(questionId, index ?? 0);
-      if (!container) {
-        result.errors.push(`Container not found for ${questionId}`);
-        continue;
-      }
-
-      let ok = false;
-      try {
-        switch (type) {
-          case 'short_text':
-          case 'paragraph':
-            ok = fillText(container, value);
-            break;
-          case 'radio':
-            ok = fillRadio(container, value);
-            break;
-          case 'checkbox':
-            ok = fillCheckbox(container, value);
-            break;
-          case 'dropdown':
-            ok = await fillDropdown(container, value);
-            break;
-          case 'date':
-            ok = fillDate(container, value);
-            break;
-          default:
-            ok = fillText(container, value);
+      for (const [entryId, value] of entries) {
+        if (!value) continue;
+        try {
+          const success = fillByEntryId(entryId, value);
+          if (success) {
+            result.filled++;
+          } else {
+            result.errors.push(`Could not locate field for ${entryId}`);
+          }
+        } catch (err) {
+          result.errors.push(`Error filling ${entryId}: ${err.message}`);
         }
-      } catch (err) {
-        result.errors.push(`Error filling ${questionId}: ${err.message}`);
+        await new Promise(r => setTimeout(r, 80));
       }
 
-      if (ok) result.filled++;
-      // Small delay between fields so Google Forms can register changes
-      await sleep(80);
+      console.log('[LWP Filler] Entry-ID Autofill complete:', result);
+      return result;
     }
 
-    console.log('[LWP Filler] Result:', result);
+    // Mode B: Question Object / ID based fallback
+    const answers = payload?.answers ?? {};
+    const entries = Object.entries(answers);
+    result.total = entries.length;
+
+    for (const [qId, ansObj] of entries) {
+      const val = ansObj?.value ?? ansObj;
+      if (!val) continue;
+
+      let el = document.querySelector(`[data-lwp-id="${qId}"]`) ||
+               document.querySelectorAll('[role="listitem"]')[ansObj?.index ?? 0];
+
+      if (el) {
+        const inp = el.querySelector('input:not([type="hidden"]), textarea');
+        if (inp && setInputValue(inp, val)) {
+          result.filled++;
+        }
+      }
+      await new Promise(r => setTimeout(r, 80));
+    }
+
     return result;
   };
 
-  console.log('[LWP Filler] Ready. Call window.__LWP_fillForm(data) to fill.');
+  console.log('[LWP Filler] Ready. Call window.__LWP_fillForm(payload) to fill.');
 })();

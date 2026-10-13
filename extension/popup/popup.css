@@ -24,8 +24,8 @@ body {
   font-family: var(--font);
   background: var(--bg);
   color: var(--text);
-  width: 320px;
-  min-height: 100px;
+  width: 340px;
+  min-height: 120px;
   font-size: 13px;
   line-height: 1.5;
 }
@@ -87,6 +87,26 @@ header {
   margin-bottom: 6px;
 }
 
+.input-url-row {
+  display: flex;
+  gap: 6px;
+}
+
+.input-url-row input {
+  flex: 1;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  font-family: var(--font);
+  font-size: 11px;
+  color: var(--text);
+  outline: none;
+}
+.input-url-row input:focus {
+  border-color: var(--accent);
+}
+
 /* Backend row */
 .backend-row {
   display: flex;
@@ -107,8 +127,11 @@ header {
 
 #backend-text {
   flex: 1;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Form info */
@@ -126,7 +149,7 @@ header {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 200px;
+  max-width: 220px;
 }
 
 .badge {
@@ -157,7 +180,7 @@ header {
   border: none;
   border-radius: var(--radius);
   font-family: var(--font);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   transition: opacity 0.15s, transform 0.1s;
@@ -169,6 +192,7 @@ header {
 
 .btn-primary { background: var(--accent2); color: var(--text); }
 .btn-secondary { background: var(--surface2); color: var(--text); }
+.btn-secondary.recording { background: var(--accent); animation: pulse 1s infinite; }
 .btn-success { background: #2e7d32; color: var(--text); }
 
 .btn-icon {
@@ -176,12 +200,42 @@ header {
   border: none;
   color: var(--text-muted);
   cursor: pointer;
-  font-size: 16px;
-  padding: 2px 4px;
+  font-size: 14px;
+  padding: 4px 6px;
   border-radius: 4px;
   line-height: 1;
 }
 .btn-icon:hover { color: var(--text); background: var(--surface); }
+
+/* ── Result Box ── */
+.result-box {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.15);
+  max-height: 130px;
+  overflow-y: auto;
+}
+
+.result-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.transcript-preview {
+  font-size: 12px;
+  color: var(--text);
+  font-style: italic;
+  margin-top: 2px;
+}
+
+.mapped-preview {
+  font-size: 11px;
+  color: var(--success);
+  font-family: 'Consolas', monospace;
+  white-space: pre-wrap;
+  margin-top: 2px;
+}
 
 /* ── Progress Bar ── */
 .fill-progress {

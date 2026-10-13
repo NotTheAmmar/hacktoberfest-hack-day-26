@@ -1,12 +1,10 @@
 """
-services/gemma_client.py — HTTP client for Gemma 2 hosted on Kaggle via ngrok.
+services/gemma_client.py — HTTP client for Gemma 4 hosted on Kaggle via ngrok.
 
-Supports two API modes (configured via GEMMA_ENDPOINT env var):
-  1. OpenAI-compatible: POST /v1/chat/completions  (recommended)
+Supports:
+  1. OpenAI-compatible: POST /v1/chat/completions (model: gemma4)
   2. Custom generate:   POST /generate
-
-Prompt templates are defined here; callers pass structured context
-and receive plain-text responses.
+  3. Direct mapping from audio transcript to entry.XXXX fields
 """
 
 from __future__ import annotations
@@ -14,13 +12,13 @@ from __future__ import annotations
 import os
 import json
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
 from dotenv import load_dotenv
 
 load_dotenv()
-logger = logging.getLogger("lwp.gemma")
+logger = logging.getLogger("lwp.gemma4")
 
 GEMMA_API_URL    = os.getenv("GEMMA_API_URL", "").rstrip("/")
 GEMMA_ENDPOINT   = os.getenv("GEMMA_ENDPOINT", "/v1/chat/completions")
@@ -31,9 +29,8 @@ REQUEST_TIMEOUT  = 60.0  # seconds
 
 def _system_prompt() -> str:
     return (
-        "You are a helpful assistant guiding a user through filling out an online form. "
-        "Be concise, clear, and friendly. Ask one thing at a time. "
-        "When interpreting answers, extract only the specific value needed — do not add extra words."
+        "You are an AI assistant powered by Gemma 4 guiding a user through filling an online form. "
+        "Extract precise answers and return clean JSON without extra conversational text."
     )
 
 
@@ -44,10 +41,6 @@ def build_question_prompt(
     description: Optional[str],
     context: dict,
 ) -> str:
-    """
-    Generate a natural-language interview question for a form field.
-    context: dict of {label: value} for answers already collected.
-    """
     ctx_lines = "\n".join(f"  - {k}: {v}" for k, v in context.items()) or "  (none yet)"
     opts_line = f"\nThe available options are: {', '.join(options)}." if options else ""
 
@@ -71,9 +64,6 @@ def build_interpret_prompt(
     options: Optional[list[str]],
     raw_answer: str,
 ) -> str:
-    """
-    Interpret a user's free-form answer into the exact value needed by the form.
-    """
     opts_line = f"\nValid options: {', '.join(options)}." if options else ""
     type_hint = {
         "radio":    "Return exactly one of the listed options.",
@@ -94,60 +84,52 @@ If you cannot determine a value, return: UNCLEAR
 Output only the value — no explanation, no quotes (unless it's a JSON array)."""
 
 
-def build_validation_prompt(
-    field_label: str,
-    field_type: str,
-    value: str,
-    rules: Optional[dict],
-) -> str:
-    """Ask Gemma to validate a value against field rules."""
-    rules_str = json.dumps(rules) if rules else "none"
-    return f"""Does this value satisfy the form field requirements?
+def build_mapping_prompt(fields: list[dict], transcript: str) -> str:
+    fields_desc = "\n".join(f"- {f.get('id')}: {f.get('label')}" for f in fields)
+    return f"""Given the following Google Form fields:
+{fields_desc}
 
-Field: "{field_label}" (type: {field_type})
-Value: "{value}"
-Validation rules: {rules_str}
+And the user's speech transcript:
+"{transcript}"
 
-Reply with either:
-  VALID
-  INVALID: <brief reason>"""
+Map the information from the transcript to the appropriate entry IDs.
+Return ONLY a valid JSON object where keys are the field IDs (e.g. "entry.123456789") and values are the extracted values.
+Do not wrap in markdown quotes if possible, output only valid JSON.
+Example output:
+{{
+  "entry.123456789": "Ammar",
+  "entry.987654321": "fever and headache"
+}}"""
 
 
 # ── HTTP Caller ───────────────────────────────────────────────────────────────
 
 async def _call_gemma(prompt: str) -> str:
-    """
-    Send a prompt to the Gemma 2 endpoint and return the response text.
-    Supports OpenAI-compatible and custom /generate endpoints.
-    """
+    """Send a prompt to the Gemma 4 endpoint and return the response text."""
     if not GEMMA_API_URL:
         logger.warning("GEMMA_API_URL not set — returning mock response")
-        return "[Gemma not configured — please set GEMMA_API_URL in .env]"
+        return "[Gemma 4 not configured — please set GEMMA_API_URL in .env]"
 
     url = GEMMA_API_URL + GEMMA_ENDPOINT
-
-    # ── Build request body ────────────────────────────────────────────────────
     is_openai_compat = "/chat/completions" in GEMMA_ENDPOINT
 
     if is_openai_compat:
         body = {
-            "model": "gemma2",          # model name on your Kaggle server
+            "model": "gemma4",
             "messages": [
                 {"role": "system", "content": _system_prompt()},
                 {"role": "user",   "content": prompt},
             ],
-            "max_tokens": 300,
-            "temperature": 0.3,
+            "max_tokens": 400,
+            "temperature": 0.2,
         }
     else:
-        # Simple /generate style (e.g. llama.cpp server, Ollama, etc.)
         body = {
             "prompt": f"<system>{_system_prompt()}</system>\n\n{prompt}",
-            "max_tokens": 300,
-            "temperature": 0.3,
+            "max_tokens": 400,
+            "temperature": 0.2,
         }
 
-    # ── Send request ──────────────────────────────────────────────────────────
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         try:
             resp = await client.post(
@@ -158,23 +140,20 @@ async def _call_gemma(prompt: str) -> str:
             resp.raise_for_status()
             data = resp.json()
         except httpx.TimeoutException:
-            raise RuntimeError("Gemma request timed out. Check your ngrok tunnel.")
+            raise RuntimeError("Gemma 4 request timed out. Check your ngrok tunnel.")
         except httpx.HTTPStatusError as e:
-            raise RuntimeError(f"Gemma API error {e.response.status_code}: {e.response.text[:200]}")
+            raise RuntimeError(f"Gemma 4 API error {e.response.status_code}: {e.response.text[:200]}")
 
-    # ── Parse response ────────────────────────────────────────────────────────
     if is_openai_compat:
-        # OpenAI format: choices[0].message.content
         try:
             return data["choices"][0]["message"]["content"].strip()
         except (KeyError, IndexError):
             raise RuntimeError(f"Unexpected OpenAI response format: {data}")
     else:
-        # Common alternatives: response, text, generated_text, content
         for key in ("response", "text", "generated_text", "content", "output"):
             if key in data:
                 return str(data[key]).strip()
-        raise RuntimeError(f"Cannot parse Gemma response: {list(data.keys())}")
+        raise RuntimeError(f"Cannot parse Gemma 4 response: {list(data.keys())}")
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -186,7 +165,6 @@ async def generate_question(
     description: Optional[str],
     context: dict,
 ) -> str:
-    """Generate a natural-language question for the given form field."""
     prompt = build_question_prompt(field_label, field_type, options, description, context)
     return await _call_gemma(prompt)
 
@@ -197,11 +175,9 @@ async def interpret_answer(
     options: Optional[list[str]],
     raw_answer: str,
 ) -> str:
-    """Interpret a raw user answer into a form-ready value."""
     prompt = build_interpret_prompt(field_label, field_type, options, raw_answer)
     result = await _call_gemma(prompt)
 
-    # Parse JSON arrays for checkbox fields
     if field_type == "checkbox":
         try:
             parsed = json.loads(result)
@@ -213,24 +189,29 @@ async def interpret_answer(
     return result
 
 
-async def validate_answer(
-    field_label: str,
-    field_type: str,
-    value: str,
-    rules: Optional[dict],
-) -> tuple[bool, Optional[str]]:
-    """
-    Ask Gemma to validate a value. Returns (is_valid, error_or_None).
-    Used as a secondary validation after structural checks.
-    """
-    prompt = build_validation_prompt(field_label, field_type, value, rules)
-    response = await _call_gemma(prompt)
+async def map_fields_from_transcript(fields: list[dict], transcript: str) -> dict[str, str]:
+    """Uses Gemma 4 to map transcript text directly into { "entry.XXXX": "value" }."""
+    prompt = build_mapping_prompt(fields, transcript)
+    response_text = await _call_gemma(prompt)
 
-    if response.upper().startswith("VALID"):
-        return True, None
-    elif response.upper().startswith("INVALID"):
-        reason = response[len("INVALID:"):].strip() if ":" in response else response
-        return False, reason
-    else:
-        # If Gemma is uncertain, trust structural validation
-        return True, None
+    # Clean potential markdown fences
+    cleaned = response_text.strip()
+    if cleaned.startswith("```json"):
+        cleaned = cleaned[7:]
+    if cleaned.startswith("```"):
+        cleaned = cleaned[3:]
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
+    cleaned = cleaned.strip()
+
+    try:
+        return json.loads(cleaned)
+    except Exception as exc:
+        logger.warning("Failed to parse JSON mapping from Gemma 4: %s (Raw: %r)", exc, response_text)
+        # Fallback dictionary
+        res = {}
+        for f in fields:
+            fid = f.get("id")
+            if fid:
+                res[fid] = transcript
+        return res
