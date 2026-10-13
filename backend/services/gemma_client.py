@@ -206,12 +206,9 @@ def fallback_interview_prompt(f: dict) -> str:
     options = f.get("options", [])
     ftype = f.get("type", "short_text")
     if options and ftype in ("radio", "dropdown", "checkbox"):
-        if len(options) <= 4:
-            opts_text = ", ".join(options[:-1]) + (" or " if len(options) > 1 else "") + options[-1]
-            return f"Which {label.lower()} are you with: {opts_text}?"
-        else:
-            opts_text = ", ".join(options[:3]) + f", or {len(options) - 3} other options"
-            return f"For {label.lower()}, please choose: {opts_text}."
+        opts_text = ", ".join(options[:-1]) + (" or " if len(options) > 1 else "") + options[-1] if len(options) > 1 else options[0]
+        q_text = label if label.endswith("?") else f"What is the {label.lower()}?"
+        return f"{q_text} Options are: {opts_text}."
     elif ftype == "date":
         return f"What is the date for {label.lower()}?"
     elif ftype == "time":

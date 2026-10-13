@@ -80,6 +80,12 @@
 
   <!-- ── Hero Voice Intake Card ─────────────────────────────── -->
   <section class="hero-voice-section" id="section-voice">
+    <!-- Main Question Banner -->
+    <div class="question-banner-box" id="question-banner-box">
+      <div class="question-banner-badge" id="question-banner-badge">Question 1</div>
+      <div class="question-banner-text" id="question-banner-text">Loading question…</div>
+    </div>
+
     <div class="mic-container">
       <button id="btn-record-hero" class="record-hero-btn" disabled>
         <div class="mic-wave-pulse" id="mic-wave-pulse"></div>
@@ -91,11 +97,19 @@
           </svg>
         </div>
         <div class="record-btn-info">
-          <div class="record-main-label" id="record-main-label">Tap to Speak Answers</div>
-          <div class="record-sub-label" id="record-sub-label">Speak your answers naturally</div>
+          <div class="record-main-label" id="record-main-label">Tap to Speak Answer</div>
+          <div class="record-sub-label" id="record-sub-label">Speak your answer clearly</div>
         </div>
         <div class="record-timer-badge hidden" id="record-timer-badge">00:00</div>
       </button>
+    </div>
+
+    <!-- Quick Visual Option Chips directly below the microphone button -->
+    <div class="options-container hidden" id="options-container">
+      <div class="options-header">
+        <span class="options-label">Options (Speak or Tap):</span>
+      </div>
+      <div class="options-chips-list" id="options-chips-list"></div>
     </div>
 
     <div class="voice-instruction" id="voice-instruction">

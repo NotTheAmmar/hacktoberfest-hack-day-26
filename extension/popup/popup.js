@@ -50,11 +50,18 @@ const btnReparse           = document.getElementById('btn-reparse');
 const fieldsLoading        = document.getElementById('fields-loading');
 const fieldsChipList       = document.getElementById('fields-chip-list');
 
+const questionBannerBox    = document.getElementById('question-banner-box');
+const questionBannerBadge  = document.getElementById('question-banner-badge');
+const questionBannerText   = document.getElementById('question-banner-text');
+
 const btnRecordHero        = document.getElementById('btn-record-hero');
 const recordMainLabel      = document.getElementById('record-main-label');
 const recordSubLabel       = document.getElementById('record-sub-label');
 const recordTimerBadge     = document.getElementById('record-timer-badge');
 const voiceInstruction     = document.getElementById('voice-instruction');
+
+const optionsContainer     = document.getElementById('options-container');
+const optionsChipsList     = document.getElementById('options-chips-list');
 
 const sectionResults       = document.getElementById('section-results');
 const mappedCountBadge     = document.getElementById('mapped-count-badge');
@@ -167,6 +174,8 @@ async function checkBackend(url) {
 // ── Render Interview Question ─────────────────────────────────────────────────
 function renderCurrentQuestion() {
   if (!parsedFields || parsedFields.length === 0) {
+    if (questionBannerBox) questionBannerBox.classList.add('hidden');
+    if (optionsContainer) optionsContainer.classList.add('hidden');
     updateHeroBtnState();
     return;
   }
@@ -174,9 +183,16 @@ function renderCurrentQuestion() {
   // Interview complete state
   if (currentQuestionIndex >= parsedFields.length) {
     formFieldsBadge.textContent = 'Completed! ✓';
+    if (questionBannerBox) {
+      questionBannerBox.classList.remove('hidden');
+      questionBannerBadge.textContent = 'All Questions Answered ✓';
+      questionBannerText.textContent = 'Interview Complete 🎉 You can now review your answers below and autofill or open the prefilled URL.';
+    }
+    if (optionsContainer) optionsContainer.classList.add('hidden');
+
     recordMainLabel.textContent = 'Interview Complete 🎉';
     recordSubLabel.textContent = `All ${parsedFields.length} questions answered`;
-    voiceInstruction.textContent = 'Review your answers below. Click "Autofill Form" or "Prefilled URL" to finish.';
+    voiceInstruction.textContent = 'Click "Autofill Form" or "Prefilled URL" below to finish.';
     btnRecordHero.disabled = true;
     btnRecordHero.classList.remove('recording', 'processing');
     recordTimerBadge.classList.add('hidden');
@@ -189,12 +205,55 @@ function renderCurrentQuestion() {
   const total = parsedFields.length;
 
   formFieldsBadge.textContent = `Q ${qNum} of ${total}`;
-  recordMainLabel.textContent = q.interview_prompt || q.label || `Question ${qNum}`;
-  recordSubLabel.textContent = `Tap mic to speak answer (${qNum}/${total})`;
 
-  // Display choices in instruction if available
+  // 1. Display field.interview_prompt as the main question banner
+  if (questionBannerBox) {
+    questionBannerBox.classList.remove('hidden');
+    questionBannerBadge.textContent = `Question ${qNum} of ${total} • ${escapeHtml(q.label || '')}`;
+    questionBannerText.textContent = q.interview_prompt || q.label || `Question ${qNum}`;
+  }
+
+  // 2. Microphone hero button labels
+  recordMainLabel.textContent = 'Tap to Speak Answer';
+  recordSubLabel.textContent = `Recording answer for question ${qNum} of ${total}`;
+
+  // 3. If field.options exists, map them as quick visual chips directly below the microphone button
+  if (optionsContainer && optionsChipsList) {
+    if (q.options && Array.isArray(q.options) && q.options.length > 0) {
+      optionsChipsList.innerHTML = '';
+      q.options.forEach(opt => {
+        const pill = document.createElement('button');
+        pill.className = 'option-pill';
+        pill.type = 'button';
+        pill.textContent = opt;
+
+        if (allAnswers[q.id] === opt) {
+          pill.classList.add('selected');
+        }
+
+        pill.addEventListener('click', () => {
+          allAnswers[q.id]     = opt;
+          allTranscripts[q.id] = opt;
+          mappedEntries        = allAnswers;
+          log(`Selected option "${opt}" for ${q.label}`, 'success');
+          renderResults(`Selected option: ${opt}`, allAnswers);
+          chrome.storage.local.set({ lastMappedEntries: allAnswers });
+          currentQuestionIndex++;
+          renderCurrentQuestion();
+        });
+
+        optionsChipsList.appendChild(pill);
+      });
+      optionsContainer.classList.remove('hidden');
+    } else {
+      optionsContainer.classList.add('hidden');
+      optionsChipsList.innerHTML = '';
+    }
+  }
+
+  // Helper instruction below
   if (q.options && q.options.length > 0) {
-    voiceInstruction.textContent = `Choices: ${q.options.join(', ')}`;
+    voiceInstruction.textContent = 'Speak your choice into the mic, or tap an option pill above.';
   } else if (q.type === 'date') {
     voiceInstruction.textContent = 'Say a date (e.g., "Tomorrow", "October 13th 2026").';
   } else if (q.type === 'time') {
@@ -214,10 +273,14 @@ function updateHeroBtnState() {
   if (isRecording) return;
 
   if (!isGoogleForm) {
+    if (questionBannerBox) questionBannerBox.classList.add('hidden');
+    if (optionsContainer) optionsContainer.classList.add('hidden');
     recordMainLabel.textContent = 'Open a Google Form';
     recordSubLabel.textContent = 'Navigate to a Google Form tab to start voice interview';
     btnRecordHero.disabled = true;
   } else if (parsedFields.length === 0) {
+    if (questionBannerBox) questionBannerBox.classList.add('hidden');
+    if (optionsContainer) optionsContainer.classList.add('hidden');
     recordMainLabel.textContent = 'Preparing Interview…';
     recordSubLabel.textContent = 'Analyzing form questions with model';
     btnRecordHero.disabled = true;

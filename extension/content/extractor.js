@@ -309,7 +309,9 @@
     function attachInterviewPrompt(item) {
       const label = item.label || 'this question';
       if (item.options && item.options.length > 0) {
-        item.interview_prompt = `Which ${label.toLowerCase()} are you with: ${item.options.slice(0, 4).join(', ')}${item.options.length > 4 ? ', or others' : ''}?`;
+        const optsStr = item.options.slice(0, -1).join(', ') + (item.options.length > 1 ? ' or ' : '') + item.options[item.options.length - 1];
+        const qText = label.endsWith('?') ? label : `What is the ${label.toLowerCase()}?`;
+        item.interview_prompt = `${qText} Options are: ${optsStr}.`;
       } else if (item.type === 'date') {
         item.interview_prompt = `What is the date for ${label.toLowerCase()}?`;
       } else if (item.type === 'time') {

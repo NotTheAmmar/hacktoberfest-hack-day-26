@@ -56,15 +56,20 @@ Scrapes the Google Form and uses Gemma 2 to generate short, structured conversat
         "interview_prompt": "What is your full legal name?"
       },
       {
-        "id": "entry.943180411",
-        "label": "Department",
+        "id": "entry.1048291",
+        "label": "Severity Level",
         "type": "radio",
-        "options": ["Engineering", "Product Design", "Human Resources"],
-        "interview_prompt": "Which department are you with: Engineering, Product Design, or Human Resources?"
+        "options": ["Low", "Medium", "High", "Critical"],
+        "interview_prompt": "What is the severity level of this incident? Options are: Low, Medium, High, or Critical."
       }
     ]
   }
   ```
+
+> [!TIP]
+> **Extension Display Guidelines:**
+> 1. Display `field.interview_prompt` as the **main question banner**.
+> 2. If `field.options` exists, map them as **quick visual chips directly below the microphone button** (users can speak or tap a chip to answer).
 
 ---
 
