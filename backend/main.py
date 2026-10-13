@@ -5,8 +5,10 @@ Startup sequence:
   1. Load environment variables from .env
   2. Load Faster-Whisper model
   3. Start FastAPI with CORS for extension + localhost origins
-  4. Serve interview web UI as static files
-  5. Mount API routers
+  4. Mount API routers
+
+Note: The interview UI lives in extension/ui/ and is served by the Chrome
+extension directly — the backend only exposes the REST API.
 
 Run with:
   uvicorn main:app --reload --port 8000
@@ -21,8 +23,7 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import JSONResponse
 
 # Load .env before anything else
 load_dotenv()
@@ -55,7 +56,8 @@ async def lifespan(app: FastAPI):
     gemma_url = os.getenv("GEMMA_API_URL", "NOT SET")
     logger.info("Gemma API URL: %s", gemma_url)
     logger.info("Backend ready at http://localhost:%s", os.getenv("PORT", "8000"))
-    logger.info("Interview UI: http://localhost:%s/", os.getenv("PORT", "8000"))
+    logger.info("API docs: http://localhost:%s/docs", os.getenv("PORT", "8000"))
+    logger.info("Interview UI: load extension/ui/index.html via the Chrome extension")
 
     yield
 
@@ -115,22 +117,17 @@ async def health_check():
         "interview_status": status,
     }
 
-# ── Static files (Interview Web UI) ──────────────────────────────────────────
-STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
-
-if os.path.isdir(STATIC_DIR):
-    @app.get("/", include_in_schema=False)
-    async def serve_index():
-        return FileResponse(os.path.join(STATIC_DIR, "index.html"))
-
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-else:
-    @app.get("/", include_in_schema=False)
-    async def no_ui():
-        return {
-            "message": "Interview UI not found. Place your static files in backend/static/.",
-            "docs": "/docs",
-        }
+# ── Root route ────────────────────────────────────────────────────────────────
+# The interview UI is served by the Chrome extension (extension/ui/index.html).
+# The backend only exposes REST API endpoints under /api/*.
+@app.get("/", include_in_schema=False)
+async def root():
+    return JSONResponse({
+        "service": "Local Whisper Paperwork — Backend API",
+        "docs": "/docs",
+        "health": "/api/health",
+        "note": "Interview UI is served by the Chrome extension (extension/ui/index.html)",
+    })
 
 
 if __name__ == "__main__":
