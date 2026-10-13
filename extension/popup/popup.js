@@ -12,11 +12,11 @@
 let currentBackendUrl = 'http://localhost:8000';
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
-const statusBanner       = document.getElementById('status-banner');
-const statusText         = document.getElementById('status-text');
+const tabPill            = document.getElementById('tab-pill');
+const tabPillText        = document.getElementById('tab-pill-text');
 const backendUrlInput    = document.getElementById('backend-url-input');
 const btnSaveUrl         = document.getElementById('btn-save-url');
-const backendIndicator   = document.getElementById('backend-indicator');
+const backendDot         = document.getElementById('backend-dot');
 const backendTextEl      = document.getElementById('backend-text');
 const btnRetryBackend    = document.getElementById('btn-retry-backend');
 const formTitleText      = document.getElementById('form-title-text');
@@ -36,6 +36,17 @@ const fillProgress       = document.getElementById('fill-progress');
 const progressFill       = document.getElementById('progress-fill');
 const progressText       = document.getElementById('progress-text');
 const logEl              = document.getElementById('log');
+
+// ── Helpers: status UI ────────────────────────────────────────────────────────
+function setTabPill(state, text) {
+  tabPill.className = `tab-pill tab-pill--${state}`;
+  tabPillText.textContent = text;
+}
+
+function setBackendDot(state, text) {
+  backendDot.dataset.state = state;
+  backendTextEl.textContent = text;
+}
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let activeTabUrl   = '';
@@ -75,15 +86,13 @@ async function checkActiveTab() {
   activeTabUrl = tab.url || '';
   if (activeTabUrl.match(/^https:\/\/(docs\.google\.com\/forms|forms\.gle)\//)) {
     isGoogleForm = true;
-    statusBanner.className = 'status-banner status-ok';
-    statusText.textContent = 'Google Form detected';
+    setTabPill('ok', 'Form detected');
     const title = tab.title || 'Google Form';
-    formTitleText.textContent = title.replace(' - Google Forms', '').trim();
+    formTitleText.textContent = title.replace(/\s*[-–]\s*Google Forms?\s*$/i, '').trim();
   } else {
     isGoogleForm = false;
-    statusBanner.className = 'status-banner status-none';
-    statusText.textContent = 'No Google Form detected on active tab';
-    formTitleText.textContent = '—';
+    setTabPill('none', 'No form here');
+    formTitleText.textContent = 'No form on this tab';
     formQuestionCount.textContent = '0 fields';
   }
   updateButtons();
@@ -91,32 +100,28 @@ async function checkActiveTab() {
 
 // ── Check backend health ──────────────────────────────────────────────────────
 async function checkBackend() {
-  backendIndicator.className = 'indicator indicator-checking';
-  backendTextEl.textContent = 'Testing connection…';
+  setBackendDot('checking', 'Testing connection…');
 
   try {
     const baseUrl = currentBackendUrl.replace(/\/+$/, '');
     const res = await fetch(`${baseUrl}/api/health`, { signal: AbortSignal.timeout(3500) }).catch(() => null);
-    
+
     if (res && res.ok) {
       backendHealthy = true;
-      backendIndicator.className = 'indicator indicator-ok';
-      backendTextEl.textContent = `Connected (${baseUrl})`;
+      setBackendDot('ok', `Connected — ${baseUrl}`);
     } else {
       const ping = await fetch(baseUrl, { method: 'HEAD', signal: AbortSignal.timeout(3500) }).catch(() => null);
       if (ping || res) {
         backendHealthy = true;
-        backendIndicator.className = 'indicator indicator-ok';
-        backendTextEl.textContent = `Endpoint reachable: ${baseUrl}`;
+        setBackendDot('ok', `Reachable — ${baseUrl}`);
       } else {
         throw new Error('Connection failed');
       }
     }
   } catch {
     backendHealthy = false;
-    backendIndicator.className = 'indicator indicator-error';
-    backendTextEl.textContent = 'Cannot reach backend URL';
-    log('Could not connect to backend. Check your ngrok or local URL.', 'error');
+    setBackendDot('error', 'Cannot reach backend');
+    log('Could not connect to backend — check URL.', 'error');
   }
 
   updateButtons();
@@ -125,8 +130,9 @@ async function checkBackend() {
 // ── Step 1: Parse Form Fields ─────────────────────────────────────────────────
 btnParseFields.addEventListener('click', async () => {
   btnParseFields.disabled = true;
-  btnParseFields.textContent = 'Parsing fields…';
-  log(`Requesting /api/v1/parse-fields for active tab…`);
+  const origLabel = btnParseFields.querySelector('.action-btn__label');
+  origLabel.textContent = 'Parsing…';
+  log('Requesting /api/v1/parse-fields for active tab…');
 
   const baseUrl = currentBackendUrl.replace(/\/+$/, '');
 
@@ -146,16 +152,15 @@ btnParseFields.addEventListener('click', async () => {
     if (data.status === 'success' && Array.isArray(data.fields)) {
       parsedFields = data.fields;
       formQuestionCount.textContent = `${parsedFields.length} fields`;
-      log(`Successfully parsed ${parsedFields.length} form fields!`, 'success');
-      
+      log(`Parsed ${parsedFields.length} form fields`, 'success');
       chrome.storage.local.set({ lastParsedFields: parsedFields });
     } else {
-      throw new Error('Invalid response structure from /parse-fields');
+      throw new Error('Invalid response from /parse-fields');
     }
   } catch (err) {
     log(`Parse error: ${err.message}`, 'error');
   } finally {
-    btnParseFields.textContent = '1. Parse Form Fields';
+    origLabel.textContent = 'Parse Form Fields';
     updateButtons();
   }
 });
