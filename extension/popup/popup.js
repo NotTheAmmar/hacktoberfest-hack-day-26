@@ -16,6 +16,8 @@ let currentBackendUrl = 'http://localhost:8000';
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 const tabPill            = document.getElementById('tab-pill');
 const tabPillText        = document.getElementById('tab-pill-text');
+const btnToggleSettings  = document.getElementById('btn-toggle-settings');
+const sectionSettings    = document.getElementById('section-settings');
 const backendUrlInput    = document.getElementById('backend-url-input');
 const btnSaveUrl         = document.getElementById('btn-save-url');
 const backendDot         = document.getElementById('backend-dot');
@@ -346,14 +348,36 @@ if (btnPrefillUrl) {
   });
 }
 
+// ── Settings Toggle & URL Save ───────────────────────────────────────────────
+if (btnToggleSettings && sectionSettings) {
+  btnToggleSettings.addEventListener('click', () => {
+    sectionSettings.classList.toggle('hidden');
+    if (!sectionSettings.classList.contains('hidden') && backendUrlInput) {
+      backendUrlInput.focus();
+      backendUrlInput.select();
+    }
+  });
+}
+
+function saveBackendUrl() {
+  const val = backendUrlInput ? backendUrlInput.value.trim() : '';
+  if (val) {
+    currentBackendUrl = val;
+    chrome.storage.local.set({ backendUrl: val });
+    log(`Saved backend URL: ${val}`);
+    checkBackend();
+  }
+}
+
 if (btnSaveUrl) {
-  btnSaveUrl.addEventListener('click', () => {
-    const val = backendUrlInput ? backendUrlInput.value.trim() : '';
-    if (val) {
-      currentBackendUrl = val;
-      chrome.storage.local.set({ backendUrl: val });
-      log(`Saved backend URL: ${val}`);
-      checkBackend();
+  btnSaveUrl.addEventListener('click', saveBackendUrl);
+}
+
+if (backendUrlInput) {
+  backendUrlInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      saveBackendUrl();
     }
   });
 }
@@ -381,4 +405,7 @@ if (btnRetryBackend) {
   }
 
   await Promise.all([checkActiveTab(), checkBackend()]);
+  if (!backendHealthy && sectionSettings) {
+    sectionSettings.classList.remove('hidden');
+  }
 })();
