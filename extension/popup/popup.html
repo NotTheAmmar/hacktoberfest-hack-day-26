@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Local Whisper Paperwork</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <div class="logo">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+        <line x1="12" y1="19" x2="12" y2="22"/>
+        <line x1="8" y1="22" x2="16" y2="22"/>
+      </svg>
+      <span>Whisper Paperwork</span>
+    </div>
+  </header>
+
+  <!-- Status Banner -->
+  <div id="status-banner" class="status-banner status-checking">
+    <div class="status-dot"></div>
+    <span id="status-text">Checking page...</span>
+  </div>
+
+  <!-- Backend Connection -->
+  <div class="section">
+    <div class="section-label">Backend</div>
+    <div class="backend-row">
+      <div id="backend-indicator" class="indicator indicator-checking"></div>
+      <span id="backend-text">Connecting to localhost:8000…</span>
+      <button id="btn-retry-backend" class="btn-icon" title="Retry connection">↺</button>
+    </div>
+  </div>
+
+  <!-- Form Detection Section -->
+  <div class="section" id="section-form">
+    <div class="section-label">Google Form</div>
+    <div id="form-info" class="form-info">
+      <span id="form-title-text" class="form-title-text">—</span>
+      <span id="form-question-count" class="badge">0 questions</span>
+    </div>
+  </div>
+
+  <!-- Actions -->
+  <div class="actions">
+    <button id="btn-extract" class="btn btn-primary" disabled>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="8 17 12 21 16 17"/>
+        <line x1="12" y1="21" x2="12" y2="3"/>
+      </svg>
+      Extract Form
+    </button>
+
+    <button id="btn-open-ui" class="btn btn-secondary" disabled>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+      </svg>
+      Open Interview
+    </button>
+
+    <button id="btn-fill" class="btn btn-success" disabled>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="20 6 9 17 4 12"/>
+      </svg>
+      Fill Form
+    </button>
+  </div>
+
+  <!-- Progress Bar (shown during fill) -->
+  <div id="fill-progress" class="fill-progress hidden">
+    <div class="progress-bar">
+      <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+    </div>
+    <span id="progress-text">Filling 0 / 0 fields…</span>
+  </div>
+
+  <!-- Log -->
+  <div id="log" class="log"></div>
+
+  <footer>
+    <a id="link-ui" href="http://localhost:8000" target="_blank">Open full UI ↗</a>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Local Whisper Paperwork — Interview</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <!-- ── Sidebar ── -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+          <line x1="12" y1="19" x2="12" y2="22"/>
+          <line x1="8" y1="22" x2="16" y2="22"/>
+        </svg>
+        <span>Whisper Paperwork</span>
+      </div>
+
+      <!-- Form info -->
+      <div class="form-meta" id="form-meta">
+        <span id="form-title-display">No form loaded</span>
+        <div class="progress-ring-wrap">
+          <svg class="progress-ring" width="52" height="52" viewBox="0 0 52 52">
+            <circle class="progress-ring-bg" cx="26" cy="26" r="20"/>
+            <circle class="progress-ring-fill" id="ring-fill" cx="26" cy="26" r="20"
+                    stroke-dasharray="125.66" stroke-dashoffset="125.66"/>
+          </svg>
+          <span id="pct-text" class="pct-text">0%</span>
+        </div>
+      </div>
+
+      <!-- Stats -->
+      <div class="stats-row">
+        <div class="stat"><span id="stat-answered">0</span><small>answered</small></div>
+        <div class="stat"><span id="stat-remaining">0</span><small>remaining</small></div>
+        <div class="stat"><span id="stat-total">0</span><small>total</small></div>
+      </div>
+    </div>
+
+    <!-- Answer history -->
+    <div class="answer-list" id="answer-list">
+      <div class="answer-list-empty">Answers will appear here as you go.</div>
+    </div>
+
+    <!-- Sidebar actions -->
+    <div class="sidebar-footer">
+      <button id="btn-review" class="btn-outline" onclick="showReview()">Review All</button>
+      <button id="btn-reset" class="btn-ghost" onclick="resetInterview()">Reset</button>
+    </div>
+  </aside>
+
+  <!-- ── Main interview panel ── -->
+  <main class="main">
+    <!-- No schema state -->
+    <div id="state-no-schema" class="state-panel">
+      <div class="state-icon">📋</div>
+      <h2>No form loaded</h2>
+      <p>Open a Google Form in Chrome, then click <strong>Extract Form</strong> in the extension popup.</p>
+      <button class="btn-primary" onclick="checkStatus()">Check again</button>
+    </div>
+
+    <!-- Interview state -->
+    <div id="state-interview" class="state-panel hidden">
+      <div class="question-card" id="question-card">
+        <div class="question-badge" id="q-badge">Question 1</div>
+        <p class="question-text" id="question-text">Loading question…</p>
+        <p class="question-hint" id="question-hint"></p>
+        <!-- Options (radio/checkbox/dropdown) -->
+        <div class="options-list" id="options-list"></div>
+      </div>
+
+      <!-- Input area -->
+      <div class="input-area">
+        <!-- Voice button -->
+        <button id="btn-mic" class="btn-mic" title="Hold to record (or click to toggle)">
+          <svg id="mic-icon" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="22"/>
+            <line x1="8" y1="22" x2="16" y2="22"/>
+          </svg>
+          <span id="mic-label">Tap to speak</span>
+        </button>
+
+        <!-- Transcript preview (shown after recording) -->
+        <div id="transcript-preview" class="transcript-preview hidden">
+          <span class="transcript-label">Transcribed:</span>
+          <span id="transcript-text"></span>
+          <button class="btn-ghost btn-sm" onclick="clearTranscript()">✕</button>
+        </div>
+
+        <!-- Text input row -->
+        <div class="text-row">
+          <input
+            type="text"
+            id="answer-input"
+            placeholder="Type your answer… (or use mic above)"
+            autocomplete="off"
+          />
+          <button id="btn-send" class="btn-send">Send ↵</button>
+        </div>
+
+        <div class="input-hints">
+          <span>Type <kbd>skip</kbd> to skip this question</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Complete state -->
+    <div id="state-complete" class="state-panel hidden">
+      <div class="state-icon">✅</div>
+      <h2>Interview complete!</h2>
+      <p>All required information has been collected. Review your answers, then fill the form.</p>
+      <div class="complete-actions">
+        <button class="btn-primary" onclick="showReview()">Review Answers</button>
+        <button class="btn-success" onclick="fillForm()">Fill Form Now</button>
+      </div>
+    </div>
+  </main>
+
+  <!-- ── Review Panel (modal overlay) ── -->
+  <div id="review-overlay" class="review-overlay hidden">
+    <div class="review-panel">
+      <div class="review-header">
+        <h2>Review Your Answers</h2>
+        <button class="btn-ghost" onclick="hideReview()">✕ Close</button>
+      </div>
+
+      <div class="review-list" id="review-list">
+        <!-- Populated dynamically -->
+      </div>
+
+      <div class="review-footer">
+        <button class="btn-outline" onclick="hideReview()">Back to Interview</button>
+        <button class="btn-success" id="btn-fill-form" onclick="fillForm()">Fill Form</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Toast Notifications ── -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
