@@ -269,21 +269,33 @@
     try {
       let fields = [];
       try {
-        const res = await fetch(`${BACKEND}/api/v1/parse-fields`, {
+        const res = await fetch(`${BACKEND}/api/v1/prepare-interview`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'ngrok-skip-browser-warning': 'true',
           },
           body: JSON.stringify({ url: window.location.href }),
-          signal: AbortSignal.timeout(10000),
+          signal: AbortSignal.timeout(12000),
         });
         if (res.ok) {
           const data = await res.json();
           if (Array.isArray(data.fields)) fields = data.fields;
+        } else {
+          // Fallback to parse-fields
+          const alt = await fetch(`${BACKEND}/api/v1/parse-fields`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+            body: JSON.stringify({ url: window.location.href }),
+            signal: AbortSignal.timeout(8000),
+          });
+          if (alt.ok) {
+            const data = await alt.json();
+            if (Array.isArray(data.fields)) fields = data.fields;
+          }
         }
       } catch (e) {
-        console.warn('[LWP Panel] Remote parse-fields failed, falling back to local DOM extractor:', e);
+        console.warn('[LWP Panel] Remote prepare-interview failed, falling back to local DOM extractor:', e);
       }
 
       if (!fields.length && window.__LWP_getKaggleFields) {
@@ -294,7 +306,8 @@
       if (fields.length) {
         schema.questions = fields.map((f, i) => ({
           id: f.id,
-          label: f.label,
+          label: f.interview_prompt || f.label,
+          interview_prompt: f.interview_prompt || f.label,
           type: f.type || 'short_text',
           options: f.options,
           index: i
@@ -441,20 +454,38 @@
       }
 
       const q = state.schema?.questions?.[state.currentQIndex];
-      const targetFields = q ? [{ id: q.id, label: q.label || q.title || 'Question', type: q.type || 'short_text', options: q.options }] : [];
       const form = new FormData();
       form.append('audio_file', blob, 'recording.webm');
-      form.append('fields_json', JSON.stringify(targetFields));
+      form.append('field_meta_json', JSON.stringify(q || {}));
 
-      const res = await fetch(`${BACKEND}/api/v1/process-audio`, {
-        method: 'POST',
-        headers: { 'ngrok-skip-browser-warning': 'true' },
-        body: form,
-        signal: AbortSignal.timeout(30000),
-      });
-      const data = await res.json();
-      const mapped = data.mapped_entries || {};
-      const text = (q && mapped[q.id]) || data.transcript?.trim() || '';
+      let text = '';
+      try {
+        const res = await fetch(`${BACKEND}/api/v1/process-single-answer`, {
+          method: 'POST',
+          headers: { 'ngrok-skip-browser-warning': 'true' },
+          body: form,
+          signal: AbortSignal.timeout(30000),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          text = data.formatted_value || data.transcript || '';
+        } else {
+          throw new Error(`HTTP ${res.status}`);
+        }
+      } catch (e) {
+        // Fallback to process-audio
+        const altForm = new FormData();
+        altForm.append('audio_file', blob, 'recording.webm');
+        altForm.append('fields_json', JSON.stringify([q]));
+        const altRes = await fetch(`${BACKEND}/api/v1/process-audio`, {
+          method: 'POST',
+          headers: { 'ngrok-skip-browser-warning': 'true' },
+          body: altForm,
+          signal: AbortSignal.timeout(30000),
+        });
+        const altData = await altRes.json();
+        text = (q && altData.mapped_entries?.[q.id]) || altData.transcript || '';
+      }
 
       if (text) {
         if (q) {

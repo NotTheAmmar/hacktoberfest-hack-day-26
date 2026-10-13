@@ -28,11 +28,11 @@ This guide walks you through setting up and testing the **Local Whisper Paperwor
 
 ---
 
-### Endpoint 1: Parse Form Fields
-Scrapes question labels, Google Form `entry.<id>` identifiers, field types, and possible choices.
+### Endpoint 1: Setup the Interview (Structure Form Questions)
+Scrapes the Google Form and uses Gemma 2 to generate short, structured conversational questions (`interview_prompt`). For choice-based fields (`radio`, `dropdown`, `checkbox`), options are explicitly incorporated in short into the prompt.
 
 - **Method:** `POST`
-- **Path:** `/api/v1/parse-fields`
+- **Path:** `/api/v1/prepare-interview`
 - **Headers:**
   ```http
   Content-Type: application/json
@@ -52,35 +52,27 @@ Scrapes question labels, Google Form `entry.<id>` identifiers, field types, and 
       {
         "id": "entry.184920482",
         "label": "Full Name",
-        "type": "short_text"
+        "type": "short_text",
+        "interview_prompt": "What is your full legal name?"
       },
       {
         "id": "entry.943180411",
         "label": "Department",
         "type": "radio",
-        "options": ["Engineering", "Design", "Marketing"]
-      },
-      {
-        "id": "entry.552194812",
-        "label": "Incident Date",
-        "type": "date"
+        "options": ["Engineering", "Product Design", "Human Resources"],
+        "interview_prompt": "Which department are you with: Engineering, Product Design, or Human Resources?"
       }
     ]
   }
   ```
 
-#### Supported Field Types
-- `"short_text"`, `"paragraph"`, `"radio"`, `"dropdown"`, `"checkbox"`
-- `"linear_scale"`, `"grid"`, `"date"`, `"time"`, `"file_upload"`
-*(The `options` array is present on choice types: `"radio"`, `"dropdown"`, `"checkbox"`).*
-
 ---
 
-### Endpoint 2: Process Audio & Map Form
-Accepts recorded audio along with the `fields` array from Endpoint 1, transcribes it with Whisper Large-v3-Turbo, and maps the extracted entities to `entry.<id>` keys via Gemma-2-2B-IT.
+### Endpoint 2: Process Single Question Answer
+Accepts the single audio blob recorded for a specific question along with that question's metadata (`field_meta_json`). Runs Whisper STT and formats the answer with Gemma into `formatted_value`.
 
 - **Method:** `POST`
-- **Path:** `/api/v1/process-audio`
+- **Path:** `/api/v1/process-single-answer`
 - **Headers:**
   ```http
   Content-Type: multipart/form-data
@@ -89,25 +81,40 @@ Accepts recorded audio along with the `fields` array from Endpoint 1, transcribe
 - **Request Payload (`FormData`):**
   | Key | Type | Description |
   |---|---|---|
-  | `audio_file` | File / Blob | WebM or WAV recording (**must be $\ge$ 1 KB / ~2+ seconds long**). |
-  | `fields_json` | string | The exact `fields` array from Endpoint 1 serialized with `JSON.stringify(fields)`. |
+  | `audio_file` | File / Blob | Audio recording for this single question. |
+  | `field_meta_json` | string | The current field object serialized: `JSON.stringify(fields[currentIndex])`. |
 
 - **Response Body (200 OK):**
   ```json
   {
     "status": "success",
-    "transcript": "My name is Vishvambar and I work in Engineering. The incident occurred on 2026-10-13.",
-    "mapped_entries": {
-      "entry.184920482": "Vishvambar",
-      "entry.943180411": "Engineering",
-      "entry.552194812": "2026-10-13"
-    }
+    "id": "entry.943180411",
+    "transcript": "uh engineering please",
+    "formatted_value": "Engineering"
   }
   ```
 
 ---
 
-### Quick cURL Test
+### Step 3: Complete the Form & Prefill
+The extension stores each result in an accumulator:
+```javascript
+allAnswers[id] = formatted_value;
+```
+Once all questions are answered, the pre-filled URL is generated:
+```javascript
+const finalUrl = new URL(formUrl.replace("/edit", "/viewform"));
+Object.entries(allAnswers).forEach(([entryId, val]) => {
+  if (val) finalUrl.searchParams.append(entryId, val);
+});
+window.open(finalUrl.toString(), "_blank");
+```
+
+---
+
+### Legacy / Backward-Compatible Endpoints
+- `POST /api/v1/parse-fields`: Scrapes form fields without generating LLM prompts.
+- `POST /api/v1/process-audio`: Accepts a single long recording for all fields at once.
 ```bash
 # 1. Test parsing fields
 curl -X POST https://<YOUR-NGROK-SUBDOMAIN>.ngrok-free.dev/api/v1/parse-fields \

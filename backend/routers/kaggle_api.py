@@ -153,3 +153,80 @@ async def process_audio(
         "transcript": transcript,
         "mapped_entries": mapped_data,
     }
+
+
+@router.post("/prepare-interview")
+async def prepare_interview(payload: ParseFieldsRequest):
+    """
+    Scrapes form fields and generates conversational, structured questions (interview_prompt)
+    with explicit short options for choice-based fields.
+    """
+    google_form_url = payload.url.strip().replace("/edit", "/viewform")
+    if not google_form_url.startswith("http"):
+        raise HTTPException(status_code=400, detail="Invalid URL provided.")
+
+    logger.info("Preparing interview from Google Form: %s", google_form_url)
+
+    fields = []
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=12.0) as client:
+            resp = await client.get(google_form_url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            })
+            if resp.status_code == 200:
+                fields = extract_form_fields_from_html(resp.text)
+    except Exception as e:
+        logger.warning("Scrape error in prepare_interview: %s", e)
+
+    if not fields:
+        raise HTTPException(status_code=400, detail="Could not extract fields from form.")
+
+    # Structure questions via Gemma (adds interview_prompt)
+    interview_fields = await gemma.generate_interview_prompts(fields)
+
+    return {"status": "success", "fields": interview_fields}
+
+
+@router.post("/process-single-answer")
+async def process_single_answer(
+    audio_file: UploadFile = File(...),
+    field_meta_json: str = Form(...),
+):
+    """
+    Accepts audio recorded for a single question + field metadata.
+    Transcribes with Whisper STT and formats with Gemma into { id, transcript, formatted_value }.
+    """
+    try:
+        field_meta = json.loads(field_meta_json)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid field_meta_json format")
+
+    audio_bytes = await audio_file.read()
+
+    # Guard: minimum 1000 bytes (~2 seconds)
+    if len(audio_bytes) < 1000:
+        raise HTTPException(
+            status_code=400,
+            detail="Audio file too short or empty. Speak for at least 2 seconds."
+        )
+
+    # 1. Transcribe with Whisper
+    transcript = ""
+    if stt_service.is_ready:
+        transcript = await stt_service.transcribe(audio_bytes)
+
+    if not transcript:
+        raise HTTPException(status_code=400, detail="No speech detected in audio.")
+
+    logger.info("Transcribed single answer: %r for field %s", transcript, field_meta.get("id"))
+
+    # 2. Format single answer via Gemma
+    formatted_val = await gemma.format_single_answer(transcript, field_meta)
+
+    return {
+        "status": "success",
+        "id": field_meta.get("id"),
+        "transcript": transcript,
+        "formatted_value": formatted_val,
+    }
+

@@ -1,30 +1,39 @@
 /**
  * popup.js — Local Whisper Paperwork popup controller
  *
- * Kaggle Backend Integration:
- *   - Auto-detects Google Form on active tab.
- *   - Auto-parses form questions via POST /api/v1/parse-fields
- *     (with instant DOM fallback if private or auth-required).
- *   - Hero Voice Intake: Records audio (with live timer & >= 1KB validation).
- *   - Calls POST /api/v1/process-audio with Whisper Large-v3-Turbo + Gemma 2.
- *   - Renders transcript + mapped answers.
- *   - One-click DOM Autofill + Prefilled URL generation.
+ * New Question-by-Question Interview Schema:
+ *   1. Setup Interview:
+ *      POST /api/v1/prepare-interview { url: formUrl }
+ *      Receives fields with model-generated structured 'interview_prompt'
+ *      (incorporating short options for choices).
+ *   2. Answer Each Question:
+ *      POST /api/v1/process-single-answer
+ *      FormData: audio_file (single question audio), field_meta_json
+ *      Receives: { status: "success", id, transcript, formatted_value }
+ *   3. Complete the Form:
+ *      allAnswers[id] = formatted_value
+ *      Generates pre-filled URL: ?entry.XXXX=val
+ *      Offers direct DOM autofill via filler.js
  */
 
 // ── State ─────────────────────────────────────────────────────────────────────
-let currentBackendUrl = 'https://rewrite-climatic-shredder.ngrok-free.dev';
-let activeTabId       = null;
-let activeTabUrl      = '';
-let isGoogleForm      = false;
-let backendHealthy    = false;
-let parsedFields      = []; // [{ id: "entry.123", label: "Full Name", type: "short_text", options? }]
-let mappedEntries     = {}; // { "entry.123": "Value" }
+let currentBackendUrl    = 'https://rewrite-climatic-shredder.ngrok-free.dev';
+let activeTabId          = null;
+let activeTabUrl         = '';
+let isGoogleForm         = false;
+let backendHealthy       = false;
 
-let mediaRecorder     = null;
-let audioChunks       = [];
-let isRecording       = false;
-let recordingSeconds  = 0;
-let timerInterval     = null;
+let parsedFields         = []; // [{ id, label, type, options?, interview_prompt }]
+let currentQuestionIndex = 0;
+let allAnswers           = {}; // { "entry.184920482": "Engineering" }
+let allTranscripts       = {}; // { "entry.184920482": "uh engineering please" }
+let mappedEntries        = {}; // mirror of allAnswers for autofill
+
+let mediaRecorder        = null;
+let audioChunks          = [];
+let isRecording          = false;
+let recordingSeconds     = 0;
+let timerInterval        = null;
 
 // ── DOM Elements ──────────────────────────────────────────────────────────────
 const tabPill              = document.getElementById('tab-pill');
@@ -94,6 +103,12 @@ function cleanUrl(url) {
   return (url || '').trim().replace(/\/+$/, '');
 }
 
+function escapeHtml(str) {
+  return String(str || '').replace(/[&<>"']/g, m => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[m]);
+}
+
 // ── Backend Connectivity Check ────────────────────────────────────────────────
 async function checkBackend(url) {
   const target = cleanUrl(url || currentBackendUrl);
@@ -107,14 +122,16 @@ async function checkBackend(url) {
   setBackendStatus('checking', 'Connecting…');
 
   try {
-    // Check Kaggle FastAPI endpoint using OPTIONS to verify CORS + tunnel
-    const res = await fetch(`${target}/api/v1/parse-fields`, {
+    // Ping with OPTIONS (CORSMiddleware answers 200 OK)
+    const res = await fetch(`${target}/api/v1/prepare-interview`, {
       method: 'OPTIONS',
       headers: { 'ngrok-skip-browser-warning': 'true' },
       signal: AbortSignal.timeout(4000),
     }).catch(() => null);
 
-    if (res && (res.ok || res.status === 200 || res.status === 405)) {
+    // Fallback ping to parse-fields if prepare-interview isn't mounted yet
+    const ok = res && (res.ok || res.status === 200 || res.status === 405);
+    if (ok) {
       backendHealthy = true;
       const hostname = target.replace(/^https?:\/\//, '').split('/')[0];
       setBackendStatus('ok', `Connected: ${hostname}`);
@@ -122,6 +139,20 @@ async function checkBackend(url) {
       updateHeroBtnState();
       return true;
     } else {
+      const pingAlt = await fetch(`${target}/api/v1/parse-fields`, {
+        method: 'OPTIONS',
+        headers: { 'ngrok-skip-browser-warning': 'true' },
+        signal: AbortSignal.timeout(3000),
+      }).catch(() => null);
+
+      if (pingAlt && (pingAlt.ok || pingAlt.status === 200 || pingAlt.status === 405)) {
+        backendHealthy = true;
+        const hostname = target.replace(/^https?:\/\//, '').split('/')[0];
+        setBackendStatus('ok', `Connected: ${hostname}`);
+        log(`Connected to Kaggle backend: ${target}`, 'success');
+        updateHeroBtnState();
+        return true;
+      }
       throw new Error(`Status ${res ? res.status : 'timeout'}`);
     }
   } catch (err) {
@@ -133,102 +164,177 @@ async function checkBackend(url) {
   }
 }
 
-// ── Update Hero Button State ──────────────────────────────────────────────────
+// ── Render Interview Question ─────────────────────────────────────────────────
+function renderCurrentQuestion() {
+  if (!parsedFields || parsedFields.length === 0) {
+    updateHeroBtnState();
+    return;
+  }
+
+  // Interview complete state
+  if (currentQuestionIndex >= parsedFields.length) {
+    formFieldsBadge.textContent = 'Completed! ✓';
+    recordMainLabel.textContent = 'Interview Complete 🎉';
+    recordSubLabel.textContent = `All ${parsedFields.length} questions answered`;
+    voiceInstruction.textContent = 'Review your answers below. Click "Autofill Form" or "Prefilled URL" to finish.';
+    btnRecordHero.disabled = true;
+    btnRecordHero.classList.remove('recording', 'processing');
+    recordTimerBadge.classList.add('hidden');
+    renderFieldChips();
+    return;
+  }
+
+  const q = parsedFields[currentQuestionIndex];
+  const qNum = currentQuestionIndex + 1;
+  const total = parsedFields.length;
+
+  formFieldsBadge.textContent = `Q ${qNum} of ${total}`;
+  recordMainLabel.textContent = q.interview_prompt || q.label || `Question ${qNum}`;
+  recordSubLabel.textContent = `Tap mic to speak answer (${qNum}/${total})`;
+
+  // Display choices in instruction if available
+  if (q.options && q.options.length > 0) {
+    voiceInstruction.textContent = `Choices: ${q.options.join(', ')}`;
+  } else if (q.type === 'date') {
+    voiceInstruction.textContent = 'Say a date (e.g., "Tomorrow", "October 13th 2026").';
+  } else if (q.type === 'time') {
+    voiceInstruction.textContent = 'Say a time (e.g., "2:30 PM", "14:30").';
+  } else {
+    voiceInstruction.textContent = 'Speak naturally. Single answer for this question.';
+  }
+
+  btnRecordHero.disabled = !backendHealthy;
+  btnRecordHero.classList.remove('recording', 'processing');
+  recordTimerBadge.classList.add('hidden');
+
+  renderFieldChips();
+}
+
 function updateHeroBtnState() {
   if (isRecording) return;
 
-  const canRecord = isGoogleForm && parsedFields.length > 0;
-  btnRecordHero.disabled = !canRecord;
-
   if (!isGoogleForm) {
     recordMainLabel.textContent = 'Open a Google Form';
-    recordSubLabel.textContent = 'Navigate to a Google Form tab to start voice filling';
+    recordSubLabel.textContent = 'Navigate to a Google Form tab to start voice interview';
+    btnRecordHero.disabled = true;
   } else if (parsedFields.length === 0) {
-    recordMainLabel.textContent = 'Detecting Fields…';
-    recordSubLabel.textContent = 'Parsing questions from the form';
+    recordMainLabel.textContent = 'Preparing Interview…';
+    recordSubLabel.textContent = 'Analyzing form questions with model';
+    btnRecordHero.disabled = true;
   } else if (!backendHealthy) {
     recordMainLabel.textContent = 'Check Backend URL';
     recordSubLabel.textContent = 'Ensure Kaggle ngrok tunnel is running and connected';
+    btnRecordHero.disabled = true;
   } else {
-    recordMainLabel.textContent = 'Tap to Speak Answers';
-    recordSubLabel.textContent = `Ready for ${parsedFields.length} detected questions`;
+    renderCurrentQuestion();
   }
 }
 
-// ── Render Parsed Field Chips ─────────────────────────────────────────────────
-function renderFieldChips(fields) {
+// ── Render Field Chips with Progress State ────────────────────────────────────
+function renderFieldChips() {
   fieldsLoading.classList.add('hidden');
   fieldsChipList.innerHTML = '';
 
-  if (!fields || fields.length === 0) {
+  if (!parsedFields || parsedFields.length === 0) {
     fieldsLoading.classList.remove('hidden');
     fieldsLoading.textContent = 'No questions detected on this form';
     return;
   }
 
-  fields.forEach(f => {
+  parsedFields.forEach((f, idx) => {
+    const isAnswered = allAnswers[f.id] !== undefined;
+    const isCurrent  = idx === currentQuestionIndex;
+
     const chip = document.createElement('span');
     chip.className = 'field-chip';
+    chip.style.cursor = 'pointer';
+
+    if (isCurrent) {
+      chip.style.borderColor = 'var(--accent)';
+      chip.style.background = 'var(--accent-bg)';
+      chip.style.color = 'var(--text)';
+    } else if (isAnswered) {
+      chip.style.borderColor = 'var(--green-border)';
+      chip.style.color = '#34d399';
+    }
+
+    const checkIcon = isAnswered ? '✓ ' : '';
     chip.innerHTML = `
-      <span>${escapeHtml(f.label || f.id)}</span>
+      <span>${checkIcon}${escapeHtml(f.label || f.id)}</span>
       <span class="field-chip__type">${escapeHtml(f.type || 'text')}</span>
     `;
+
+    // Click on a chip allows jumping to that question to re-record
+    chip.title = f.interview_prompt || f.label;
+    chip.addEventListener('click', () => {
+      currentQuestionIndex = idx;
+      renderCurrentQuestion();
+      log(`Switched to question ${idx + 1}: "${f.label}"`, 'info');
+    });
+
     fieldsChipList.appendChild(chip);
   });
 
   fieldsChipList.classList.remove('hidden');
 }
 
-function escapeHtml(str) {
-  return String(str || '').replace(/[&<>"']/g, m => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-  })[m]);
-}
-
-// ── Parse Form Fields Automatically ───────────────────────────────────────────
-async function parseFormFields() {
+// ── Step 1: Prepare Interview (Model Analyzes & Structures Questions) ────────
+async function prepareFormInterview() {
   if (!isGoogleForm || !activeTabUrl) return;
 
   fieldsLoading.classList.remove('hidden');
-  fieldsLoading.innerHTML = '<span class="spinner-sm"></span> Parsing questions from form…';
+  fieldsLoading.innerHTML = '<span class="spinner-sm"></span> Model analyzing questions & structuring interview…';
   fieldsChipList.classList.add('hidden');
-  formFieldsBadge.textContent = 'Parsing…';
+  formFieldsBadge.textContent = 'Preparing…';
 
   const baseUrl = cleanUrl(currentBackendUrl);
   let fields = [];
 
-  // Step 1: Call Kaggle /api/v1/parse-fields
+  // 1. Try Kaggle Endpoint 1: POST /api/v1/prepare-interview
   if (baseUrl) {
     try {
-      log('Calling Kaggle /api/v1/parse-fields…');
-      const res = await fetch(`${baseUrl}/api/v1/parse-fields`, {
+      log('Requesting POST /api/v1/prepare-interview from Kaggle…');
+      const res = await fetch(`${baseUrl}/api/v1/prepare-interview`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'ngrok-skip-browser-warning': 'true',
         },
         body: JSON.stringify({ url: activeTabUrl }),
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.timeout(15000),
       });
 
       if (res.ok) {
         const data = await res.json();
         if (data.status === 'success' && Array.isArray(data.fields) && data.fields.length > 0) {
           fields = data.fields;
-          backendHealthy = true;
-          setBackendStatus('ok', `Connected: ${baseUrl.replace(/^https?:\/\//, '').split('/')[0]}`);
-          log(`Kaggle scraped ${fields.length} fields from Google Form!`, 'success');
+          log(`Kaggle prepared ${fields.length} structured interview questions!`, 'success');
         }
       } else {
-        const err = await res.json().catch(() => ({}));
-        log(`Kaggle parse error: ${err.detail || res.status}. Trying DOM fallback…`, 'info');
+        // Fallback: try legacy /api/v1/parse-fields
+        log(`prepare-interview returned ${res.status}. Falling back to /api/v1/parse-fields…`, 'info');
+        const alt = await fetch(`${baseUrl}/api/v1/parse-fields`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'ngrok-skip-browser-warning': 'true',
+          },
+          body: JSON.stringify({ url: activeTabUrl }),
+          signal: AbortSignal.timeout(10000),
+        });
+        if (alt.ok) {
+          const altData = await alt.json();
+          if (altData.status === 'success' && Array.isArray(altData.fields)) {
+            fields = altData.fields;
+          }
+        }
       }
     } catch (err) {
-      log(`Remote scrape failed (${err.message}). Trying DOM fallback…`, 'info');
+      log(`Remote prepare failed (${err.message}). Trying DOM fallback…`, 'info');
     }
   }
 
-  // Step 2: DOM fallback if remote scraping was blocked or private
+  // 2. Client-side DOM question extractor fallback
   if (fields.length === 0 && activeTabId) {
     try {
       log('Running client-side DOM question extractor fallback…');
@@ -240,29 +346,45 @@ async function parseFormFields() {
       const domFields = results?.[0]?.result;
       if (Array.isArray(domFields) && domFields.length > 0) {
         fields = domFields;
-        log(`DOM fallback extracted ${fields.length} questions from tab!`, 'success');
+        log(`DOM fallback extracted ${fields.length} questions from page!`, 'success');
       }
     } catch (err) {
       log(`DOM extraction error: ${err.message}`, 'error');
     }
   }
 
-  // Update State & UI
+  // Ensure each field has an interview_prompt
+  fields.forEach(f => {
+    if (!f.interview_prompt) {
+      const label = f.label || 'this question';
+      if (f.options && f.options.length > 0) {
+        const optsStr = f.options.slice(0, 4).join(', ') + (f.options.length > 4 ? ', or others' : '');
+        f.interview_prompt = `Which ${label.toLowerCase()} are you with: ${optsStr}?`;
+      } else {
+        f.interview_prompt = label.endsWith('?') ? label : `What is your ${label.toLowerCase()}?`;
+      }
+    }
+  });
+
   if (fields.length > 0) {
     parsedFields = fields;
-    formFieldsBadge.textContent = `${parsedFields.length} questions`;
-    renderFieldChips(parsedFields);
+    currentQuestionIndex = 0;
+    allAnswers = {};
+    allTranscripts = {};
+    mappedEntries = {};
+
+    renderFieldChips();
+    renderCurrentQuestion();
     chrome.storage.local.set({ lastParsedFields: parsedFields });
   } else {
     fieldsLoading.classList.remove('hidden');
-    fieldsLoading.textContent = 'Could not find question fields. Refresh tab and try again.';
+    fieldsLoading.textContent = 'Could not find question fields. Refresh form tab and try again.';
     formFieldsBadge.textContent = '0 questions';
+    updateHeroBtnState();
   }
-
-  updateHeroBtnState();
 }
 
-// ── Check Active Browser Tab ──────────────────────────────────────────────────
+// ── Check Active Tab ──────────────────────────────────────────────────────────
 async function checkActiveTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab) return;
@@ -300,13 +422,11 @@ async function saveBackendUrl() {
 
   const ok = await checkBackend(val);
   if (ok && isGoogleForm && parsedFields.length === 0) {
-    await parseFormFields();
+    await prepareFormInterview();
   }
 }
 
-if (btnSaveUrl) {
-  btnSaveUrl.addEventListener('click', saveBackendUrl);
-}
+if (btnSaveUrl) btnSaveUrl.addEventListener('click', saveBackendUrl);
 if (backendUrlInput) {
   backendUrlInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
@@ -319,11 +439,11 @@ if (backendUrlInput) {
 if (btnReparse) {
   btnReparse.addEventListener('click', async () => {
     await checkActiveTab();
-    await parseFormFields();
+    await prepareFormInterview();
   });
 }
 
-// ── Hero Voice Recording ──────────────────────────────────────────────────────
+// ── Hero Voice Recording (Question-by-Question) ───────────────────────────────
 btnRecordHero.addEventListener('click', async () => {
   if (isRecording) {
     stopRecording();
@@ -333,6 +453,8 @@ btnRecordHero.addEventListener('click', async () => {
 });
 
 async function startRecording() {
+  if (currentQuestionIndex >= parsedFields.length) return;
+
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     audioChunks = [];
@@ -346,16 +468,16 @@ async function startRecording() {
       stream.getTracks().forEach(track => track.stop());
       const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
 
-      // Guard: audio must be >= 1 KB / ~2+ seconds long
-      if (audioBlob.size < 1000 || recordingSeconds < 2) {
-        log('Audio too short (< 2s or < 1KB). Please speak for at least 2 seconds.', 'error');
-        voiceInstruction.textContent = '⚠️ Spoke too briefly. Please speak for at least 2 seconds.';
+      // Guard: must be >= 500 bytes and >= 1 second
+      if (audioBlob.size < 500 || recordingSeconds < 1) {
+        log('Recording was too short. Please speak clearly.', 'error');
+        voiceInstruction.textContent = '⚠️ Recording too short. Please tap and speak your answer again.';
         voiceInstruction.style.color = '#f87171';
         resetRecordBtn();
         return;
       }
 
-      await processAudioWithKaggle(audioBlob);
+      await processSingleAnswerWithKaggle(audioBlob);
     };
 
     mediaRecorder.start();
@@ -363,8 +485,8 @@ async function startRecording() {
     recordingSeconds = 0;
 
     btnRecordHero.classList.add('recording');
-    recordMainLabel.textContent = 'Recording… Tap to Finish';
-    recordSubLabel.textContent = 'Speak your answers naturally';
+    recordMainLabel.textContent = 'Listening… Tap to Finish';
+    recordSubLabel.textContent = `Recording answer for question ${currentQuestionIndex + 1}`;
     recordTimerBadge.textContent = '00:00';
     recordTimerBadge.classList.remove('hidden');
 
@@ -375,10 +497,10 @@ async function startRecording() {
       recordTimerBadge.textContent = `${mins}:${secs}`;
     }, 1000);
 
-    log('Recording started — speak your answers clearly.', 'info');
+    log(`Recording answer for Q${currentQuestionIndex + 1}…`, 'info');
   } catch (err) {
-    log(`Microphone access error: ${err.message}`, 'error');
-    alert(`Could not access microphone: ${err.message}`);
+    log(`Microphone error: ${err.message}`, 'error');
+    alert(`Microphone error: ${err.message}`);
   }
 }
 
@@ -396,29 +518,31 @@ function stopRecording() {
   btnRecordHero.classList.remove('recording');
   btnRecordHero.classList.add('processing');
   recordTimerBadge.classList.add('hidden');
-  recordMainLabel.textContent = 'Transcribing & Mapping…';
-  recordSubLabel.textContent = 'Whisper + Gemma 2 running on GPU';
+  recordMainLabel.textContent = 'Structuring Answer…';
+  recordSubLabel.textContent = 'Whisper transcribing + Gemma formatting';
   btnRecordHero.disabled = true;
 }
 
 function resetRecordBtn() {
   btnRecordHero.classList.remove('recording', 'processing');
   recordTimerBadge.classList.add('hidden');
-  btnRecordHero.disabled = false;
-  updateHeroBtnState();
+  renderCurrentQuestion();
 }
 
-// ── Process Audio via Kaggle Backend ──────────────────────────────────────────
-async function processAudioWithKaggle(audioBlob) {
-  log(`Uploading audio (${Math.round(audioBlob.size / 1024)} KB) to /api/v1/process-audio…`, 'info');
+// ── Step 2: Answer Each Question (POST /api/v1/process-single-answer) ────────
+async function processSingleAnswerWithKaggle(audioBlob) {
+  const currentQ = parsedFields[currentQuestionIndex];
+  if (!currentQ) return;
+
+  log(`Sending single answer to /api/v1/process-single-answer for field: ${currentQ.label}…`, 'info');
   const baseUrl = cleanUrl(currentBackendUrl);
 
   const formData = new FormData();
-  formData.append('audio_file', audioBlob, 'recording.webm');
-  formData.append('fields_json', JSON.stringify(parsedFields));
+  formData.append('audio_file', audioBlob, 'question_answer.webm');
+  formData.append('field_meta_json', JSON.stringify(currentQ));
 
   try {
-    const res = await fetch(`${baseUrl}/api/v1/process-audio`, {
+    const res = await fetch(`${baseUrl}/api/v1/process-single-answer`, {
       method: 'POST',
       headers: {
         'ngrok-skip-browser-warning': 'true',
@@ -433,43 +557,47 @@ async function processAudioWithKaggle(audioBlob) {
 
     const data = await res.json();
     if (data.status === 'success') {
-      mappedEntries = data.mapped_entries || {};
+      const fieldId   = data.id || currentQ.id;
       const transcript = data.transcript || '';
+      const formatted  = data.formatted_value || transcript;
 
-      renderResults(transcript, mappedEntries);
-      log(`Transcribed: "${transcript}"`, 'success');
-      log(`Mapped ${Object.keys(mappedEntries).length} entries with Gemma!`, 'success');
+      // Accumulator: store formatted value
+      allAnswers[fieldId]     = formatted;
+      allTranscripts[fieldId] = transcript;
+      mappedEntries           = allAnswers;
 
-      chrome.storage.local.set({ lastMappedEntries: mappedEntries });
+      log(`Q${currentQuestionIndex + 1} answered: "${formatted}" (transcription: "${transcript}")`, 'success');
+
+      // Update UI results view
+      renderResults(transcript, allAnswers);
+      chrome.storage.local.set({ lastMappedEntries: allAnswers });
+
+      // Advance to next question!
+      currentQuestionIndex++;
+      renderCurrentQuestion();
     } else {
-      throw new Error('Unexpected response format from /process-audio');
+      throw new Error('Unexpected response format from /process-single-answer');
     }
   } catch (err) {
-    log(`Processing error: ${err.message}`, 'error');
-    alert(`AI Processing error: ${err.message}`);
-  } finally {
+    log(`Single answer error: ${err.message}`, 'error');
+    alert(`Error processing answer: ${err.message}`);
     resetRecordBtn();
   }
 }
 
-// ── Render Results & Mapped Fields ────────────────────────────────────────────
-function renderResults(transcript, mapped) {
+// ── Step 3: Complete the Form (Results & Autofill Accumulator) ────────────────
+function renderResults(latestTranscript, answers) {
   sectionResults.classList.remove('hidden');
-  transcriptText.textContent = `"${transcript}"`;
+  transcriptText.textContent = latestTranscript ? `"${latestTranscript}"` : '(No transcript)';
 
-  const keys = Object.keys(mapped);
-  mappedCountBadge.textContent = `${keys.length} mapped`;
+  const keys = Object.keys(answers);
+  mappedCountBadge.textContent = `${keys.length} / ${parsedFields.length} answered`;
 
   mappedList.innerHTML = '';
-  if (keys.length === 0) {
-    mappedList.innerHTML = '<div style="color:var(--text-3);font-size:11px;">No fields could be mapped from the spoken answers.</div>';
-    return;
-  }
-
   keys.forEach(k => {
     const field = parsedFields.find(f => f.id === k);
     const label = field ? field.label : k;
-    const val   = mapped[k];
+    const val   = answers[k];
 
     const row = document.createElement('div');
     row.className = 'mapped-item';
@@ -481,24 +609,24 @@ function renderResults(transcript, mapped) {
   });
 }
 
-// ── Autofill Active Form directly in DOM ──────────────────────────────────────
+// ── Complete the Form: Option A — Direct DOM Autofill ─────────────────────────
 btnAutofill.addEventListener('click', async () => {
-  if (!activeTabId || Object.keys(mappedEntries).length === 0) return;
+  if (!activeTabId || Object.keys(allAnswers).length === 0) return;
 
   btnAutofill.disabled = true;
   fillProgress.classList.remove('hidden');
   progressFill.style.width = '35%';
-  progressText.textContent = 'Autofilling form fields…';
-  log('Injecting answers directly into Google Form DOM…', 'info');
+  progressText.textContent = 'Autofilling Google Form fields…';
+  log('Injecting accumulated answers into form DOM…', 'info');
 
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId: activeTabId },
       func: (entries) => window.__LWP_fillForm?.({ mapped_entries: entries }),
-      args: [mappedEntries],
+      args: [allAnswers],
     });
 
-    const res = results?.[0]?.result || { filled: 0, total: Object.keys(mappedEntries).length };
+    const res = results?.[0]?.result || { filled: 0, total: Object.keys(allAnswers).length };
     progressFill.style.width = '100%';
     progressText.textContent = `✓ Filled ${res.filled} / ${res.total} fields!`;
     log(`Autofill complete: ${res.filled} fields filled!`, 'success');
@@ -510,18 +638,18 @@ btnAutofill.addEventListener('click', async () => {
   }
 });
 
-// ── Open Prefilled Form URL ───────────────────────────────────────────────────
+// ── Complete the Form: Option B — Generate Pre-filled URL Redirection ─────────
 btnPrefillUrl.addEventListener('click', () => {
-  if (!activeTabUrl || Object.keys(mappedEntries).length === 0) return;
+  if (!activeTabUrl || Object.keys(allAnswers).length === 0) return;
   try {
-    const cleanFormUrl = new URL(activeTabUrl.replace('/edit', '/viewform'));
-    Object.entries(mappedEntries).forEach(([entryId, value]) => {
-      if (value) cleanFormUrl.searchParams.set(entryId, String(value));
+    const finalUrl = new URL(activeTabUrl.replace('/edit', '/viewform'));
+    Object.entries(allAnswers).forEach(([entryId, val]) => {
+      if (val) finalUrl.searchParams.append(entryId, val);
     });
-    chrome.tabs.create({ url: cleanFormUrl.toString() });
+    window.open(finalUrl.toString(), '_blank');
     log('Opened prefilled form URL in a new tab!', 'success');
   } catch (e) {
-    log(`Error generating URL: ${e.message}`, 'error');
+    log(`Error generating prefilled URL: ${e.message}`, 'error');
   }
 });
 
@@ -559,12 +687,13 @@ if (btnOpenPanel) {
 
   if (saved.lastParsedFields && saved.lastParsedFields.length > 0) {
     parsedFields = saved.lastParsedFields;
-    formFieldsBadge.textContent = `${parsedFields.length} questions`;
-    renderFieldChips(parsedFields);
+    renderFieldChips();
   }
 
   if (saved.lastMappedEntries && Object.keys(saved.lastMappedEntries).length > 0) {
-    mappedEntries = saved.lastMappedEntries;
+    allAnswers    = saved.lastMappedEntries;
+    mappedEntries = allAnswers;
+    renderResults('', allAnswers);
   }
 
   // Detect active tab and verify Kaggle connection concurrently
@@ -573,8 +702,8 @@ if (btnOpenPanel) {
     checkBackend(currentBackendUrl),
   ]);
 
-  // If on a Google Form, auto-parse fields right away!
+  // If on a Google Form, prepare the interview immediately
   if (isGoogleForm) {
-    await parseFormFields();
+    await prepareFormInterview();
   }
 })();

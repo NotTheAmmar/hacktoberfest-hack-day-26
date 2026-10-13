@@ -306,8 +306,23 @@
       }
     });
 
-    console.log('[LWP Extractor] Client extracted fields from DOM:', fields);
-    return fields;
+    function attachInterviewPrompt(item) {
+      const label = item.label || 'this question';
+      if (item.options && item.options.length > 0) {
+        item.interview_prompt = `Which ${label.toLowerCase()} are you with: ${item.options.slice(0, 4).join(', ')}${item.options.length > 4 ? ', or others' : ''}?`;
+      } else if (item.type === 'date') {
+        item.interview_prompt = `What is the date for ${label.toLowerCase()}?`;
+      } else if (item.type === 'time') {
+        item.interview_prompt = `What time for ${label.toLowerCase()}?`;
+      } else {
+        item.interview_prompt = label.endsWith('?') ? label : `What is your ${label.toLowerCase()}?`;
+      }
+      return item;
+    }
+
+    const finalFields = fields.map(attachInterviewPrompt);
+    console.log('[LWP Extractor] Client extracted fields from DOM:', finalFields);
+    return finalFields;
   };
 
   console.log('[LWP Extractor] Ready. Call window.__LWP_extractForm() or window.__LWP_getKaggleFields().');

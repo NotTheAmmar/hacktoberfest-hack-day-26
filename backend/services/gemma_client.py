@@ -201,6 +201,128 @@ async def interpret_answer(
     return result
 
 
+def fallback_interview_prompt(f: dict) -> str:
+    label = f.get("label", "this question").strip().rstrip("?:*")
+    options = f.get("options", [])
+    ftype = f.get("type", "short_text")
+    if options and ftype in ("radio", "dropdown", "checkbox"):
+        if len(options) <= 4:
+            opts_text = ", ".join(options[:-1]) + (" or " if len(options) > 1 else "") + options[-1]
+            return f"Which {label.lower()} are you with: {opts_text}?"
+        else:
+            opts_text = ", ".join(options[:3]) + f", or {len(options) - 3} other options"
+            return f"For {label.lower()}, please choose: {opts_text}."
+    elif ftype == "date":
+        return f"What is the date for {label.lower()}?"
+    elif ftype == "time":
+        return f"What time for {label.lower()}?"
+    elif ftype == "paragraph":
+        return f"Please describe your {label.lower()}."
+    return f"What is your {label.lower()}?" if not label.endswith("?") else label
+
+
+async def generate_interview_prompts(fields: list[dict]) -> list[dict]:
+    """
+    Analyzes form questions and generates structured, conversational interview_prompt
+    for each question, explicitly detailing options in short for choice fields.
+    """
+    fields_copy = [dict(f) for f in fields]
+    
+    # Pre-populate with intelligent fallbacks
+    for f in fields_copy:
+        f["interview_prompt"] = fallback_interview_prompt(f)
+
+    if not GEMMA_API_URL:
+        return fields_copy
+
+    try:
+        fields_json_str = json.dumps([{
+            "id": f.get("id"),
+            "label": f.get("label"),
+            "type": f.get("type"),
+            "options": f.get("options", [])
+        } for f in fields_copy], indent=2)
+
+        prompt = f"""<start_of_turn>user
+You are an expert AI interviewer helping a user complete an online form.
+For each form field, generate a friendly, clear, concise interview question ('interview_prompt') to ask the user by voice.
+
+Rules:
+1. For text/paragraph/date/time fields: keep it natural and direct (e.g. "What is your full legal name?").
+2. For radio, dropdown, or checkbox fields with options: you MUST include the options in short in the prompt so the user knows what choices exist (e.g. "Which department are you with: Engineering, Product Design, or Human Resources?").
+3. Return ONLY a valid JSON list of objects matching the input fields with the added 'interview_prompt' string key.
+4. No preamble or markdown code blocks.
+
+Fields:
+{fields_json_str}
+<end_of_turn>
+<start_of_turn>model
+"""
+        resp = await _call_gemma(prompt)
+        cleaned = resp.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        if cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        parsed = json.loads(cleaned.strip())
+        if isinstance(parsed, list):
+            prompt_map = {item.get("id"): item.get("interview_prompt") for item in parsed if item.get("id")}
+            for f in fields_copy:
+                if prompt_map.get(f.get("id")):
+                    f["interview_prompt"] = prompt_map[f.get("id")]
+    except Exception as exc:
+        logger.warning("Gemma prompt generation failed, using intelligent fallbacks: %s", exc)
+
+    return fields_copy
+
+
+async def format_single_answer(transcript: str, field_meta: dict) -> str:
+    """
+    Extracts and formats a single answer from spoken transcript into the form field value.
+    """
+    raw = transcript.strip().rstrip(".,!?")
+    options = field_meta.get("options", [])
+    ftype = field_meta.get("type", "short_text")
+
+    # Fast heuristic for options match
+    if options:
+        lower_raw = raw.lower()
+        for opt in options:
+            if opt.lower() == lower_raw or opt.lower() in lower_raw:
+                return opt
+
+    if not GEMMA_API_URL:
+        return raw
+
+    try:
+        opts_hint = f"\nValid options: {json.dumps(options)}" if options else ""
+        prompt = f"""<start_of_turn>user
+You are an automated data entry assistant.
+Field Label: "{field_meta.get('label')}"
+Field Type: {ftype}{opts_hint}
+Interview Question: "{field_meta.get('interview_prompt', field_meta.get('label'))}"
+User's Spoken Answer: "{transcript}"
+
+Task: Extract the exact formatted value for this field.
+Requirements:
+1. If field type is radio or dropdown, output the EXACT matching option string.
+2. If checkbox, output comma-separated matching options.
+3. If date, output YYYY-MM-DD format.
+4. If time, output HH:MM format.
+5. If short text or paragraph, clean up speech filler words (e.g. "uh", "um", "please") and output clean text.
+6. Output ONLY the raw value string with no quotes, no markdown, and no explanation.
+<end_of_turn>
+<start_of_turn>model
+"""
+        formatted = await _call_gemma(prompt)
+        return formatted.strip().strip('"\'')
+    except Exception as exc:
+        logger.warning("Gemma single answer format failed, returning raw transcript: %s", exc)
+        return raw
+
+
 async def map_fields_from_transcript(fields: list[dict], transcript: str) -> dict[str, str]:
     """Uses Gemma 4 to map transcript text directly into { "entry.XXXX": "value" }."""
     prompt = build_mapping_prompt(fields, transcript)
@@ -227,3 +349,4 @@ async def map_fields_from_transcript(fields: list[dict], transcript: str) -> dic
             if fid:
                 res[fid] = transcript
         return res
+
