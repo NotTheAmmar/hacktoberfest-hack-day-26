@@ -10,15 +10,15 @@
 
 | Phase | Status | Notes |
 |---|---|---|
-| Phase 1 — Extension Foundation | ⬜ Not Started | |
-| Phase 2 — Form Schema Extraction | ⬜ Not Started | |
-| Phase 3 — Backend + Gemma Integration | ⬜ Not Started | Waiting for ngrok URL in `.env` |
-| Phase 4 — Conversational Interview | ⬜ Not Started | |
-| Phase 5 — Voice Input | ⬜ Not Started | |
-| Phase 6 — Validation & Autofill | ⬜ Not Started | |
-| Phase 7 — End-to-End Demo | ⬜ Not Started | |
+| Phase 1 — Extension Foundation | ✅ Complete | Manifest V3, popup, background worker implemented |
+| Phase 2 — Form Schema Extraction | ✅ Complete | extractor.js DOM parser & schema upload implemented |
+| Phase 3 — Backend + Gemma Integration | 🟡 In Progress | Backend ready with fallback; waiting for ngrok URL in `.env` |
+| Phase 4 — Conversational Interview | ✅ Complete | Engine, Q&A endpoints, option chips & state logic done |
+| Phase 5 — Voice Input | ✅ Complete | Local Faster-Whisper STT & Web MediaRecorder done |
+| Phase 6 — Validation & Autofill | ✅ Complete | filler.js DOM dispatcher & review screen done |
+| Phase 7 — End-to-End Demo | 🟡 Ready for Testing | Testing guide created in artifacts |
 
-**Legend:** ⬜ Not Started | 🟡 In Progress | ✅ Complete | 🔴 Blocked
+**Legend:** ⬜ Not Started | 🟡 In Progress / Ready | ✅ Complete | 🔴 Blocked
 
 ---
 
