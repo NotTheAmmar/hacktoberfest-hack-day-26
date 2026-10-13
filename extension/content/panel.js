@@ -12,7 +12,12 @@
 (() => {
   'use strict';
 
-  const BACKEND = 'http://localhost:8000';
+  let BACKEND = 'http://localhost:8000';
+  if (typeof chrome !== 'undefined' && chrome?.storage?.local) {
+    chrome.storage.local.get(['backendUrl'], (res) => {
+      if (res?.backendUrl) BACKEND = res.backendUrl.replace(/\/+$/, '');
+    });
+  }
 
   // ── Prevent double-injection ───────────────────────────────────────────────
   if (document.getElementById('lwp-panel')) {
@@ -237,7 +242,10 @@
 
     // Backend health
     try {
-      const res  = await fetch(`${BACKEND}/api/health`, { signal: AbortSignal.timeout(3000) });
+      const res  = await fetch(`${BACKEND}/api/health`, {
+        headers: { 'ngrok-skip-browser-warning': 'true' },
+        signal: AbortSignal.timeout(3000)
+      });
       const data = await res.json();
       $('lwp-backend-dot').className  = 'lwp-dot green';
       $('lwp-backend-text').textContent = `Backend ready (${data.whisper_model ?? 'whisper'})`;
@@ -260,7 +268,10 @@
 
       const res = await fetch(`${BACKEND}/api/form-schema`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true',
+        },
         body: JSON.stringify(schema),
       });
 
@@ -405,7 +416,12 @@
       const form = new FormData();
       form.append('audio', blob, 'recording.webm');
 
-      const res  = await fetch(`${BACKEND}/api/transcribe`, { method: 'POST', body: form, signal: AbortSignal.timeout(15000) });
+      const res  = await fetch(`${BACKEND}/api/transcribe`, {
+        method: 'POST',
+        headers: { 'ngrok-skip-browser-warning': 'true' },
+        body: form,
+        signal: AbortSignal.timeout(15000),
+      });
       const data = await res.json();
       const text = data.text?.trim();
 
@@ -472,7 +488,10 @@
       const payload = { answers: state.answers, form_id: state.schema?.formId };
       const res = await fetch(`${BACKEND}/api/autofill-data`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true',
+        },
         body: JSON.stringify(payload),
       });
 

@@ -5,6 +5,8 @@
  *   1. POST /api/v1/parse-fields  { url: currentTabUrl }
  *   2. POST /api/v1/process-audio { audio_file, fields_json }
  *   3. Autofill Google Form via entry.XXXX mapping
+ *      Option A: Open Prefilled Form URL
+ *      Option B: Direct DOM Autofill
  * Also supports launching the in-page Floating Interview Panel.
  */
 
@@ -27,6 +29,7 @@ const btnRecordAudio     = document.getElementById('btn-record-audio');
 const micLabel           = document.getElementById('mic-label');
 const btnOpenPanel       = document.getElementById('btn-open-panel');
 const btnFill            = document.getElementById('btn-fill');
+const btnPrefillUrl      = document.getElementById('btn-prefill-url');
 
 const resultBox          = document.getElementById('result-box');
 const transcriptPreview  = document.getElementById('transcript-preview');
@@ -52,7 +55,7 @@ function setBackendDot(state, text) {
 let activeTabUrl   = '';
 let isGoogleForm   = false;
 let backendHealthy = false;
-let parsedFields   = [];          // [{ id: "entry.123", label: "Full Name" }]
+let parsedFields   = [];          // [{ id: "entry.123", label: "Full Name", type, options? }]
 let mappedEntries  = {};          // { "entry.123": "Value" }
 
 let mediaRecorder  = null;
@@ -75,7 +78,11 @@ function updateButtons() {
   if (btnOpenPanel) {
     btnOpenPanel.disabled = !isGoogleForm;
   }
-  btnFill.disabled        = !(isGoogleForm && Object.keys(mappedEntries).length > 0);
+  const hasMapped = isGoogleForm && Object.keys(mappedEntries).length > 0;
+  btnFill.disabled        = !hasMapped;
+  if (btnPrefillUrl) {
+    btnPrefillUrl.disabled = !hasMapped;
+  }
 }
 
 // ── Check active tab ──────────────────────────────────────────────────────────
@@ -104,13 +111,14 @@ async function checkBackend() {
 
   try {
     const baseUrl = currentBackendUrl.replace(/\/+$/, '');
-    const res = await fetch(`${baseUrl}/api/health`, { signal: AbortSignal.timeout(3500) }).catch(() => null);
+    const headers = { 'ngrok-skip-browser-warning': 'true' };
+    const res = await fetch(`${baseUrl}/api/health`, { headers, signal: AbortSignal.timeout(3500) }).catch(() => null);
 
     if (res && res.ok) {
       backendHealthy = true;
       setBackendDot('ok', `Connected — ${baseUrl}`);
     } else {
-      const ping = await fetch(baseUrl, { method: 'HEAD', signal: AbortSignal.timeout(3500) }).catch(() => null);
+      const ping = await fetch(baseUrl, { method: 'HEAD', headers, signal: AbortSignal.timeout(3500) }).catch(() => null);
       if (ping || res) {
         backendHealthy = true;
         setBackendDot('ok', `Reachable — ${baseUrl}`);
@@ -139,7 +147,10 @@ btnParseFields.addEventListener('click', async () => {
   try {
     const res = await fetch(`${baseUrl}/api/v1/parse-fields`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': 'true',
+      },
       body: JSON.stringify({ url: activeTabUrl }),
     });
 
@@ -209,6 +220,17 @@ async function startRecording() {
     mediaRecorder.onstop = async () => {
       stream.getTracks().forEach(track => track.stop());
       const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+
+      // Guard: audio must be >= 1 KB / ~2+ seconds long
+      if (audioBlob.size < 1000) {
+        log('Audio too short (< 1 KB). Please speak for at least 2 seconds.', 'error');
+        micLabel.textContent = 'Record Audio Response';
+        btnRecordAudio.classList.remove('recording');
+        btnRecordAudio.disabled = false;
+        updateButtons();
+        return;
+      }
+
       await processAudioWithKaggle(audioBlob);
     };
 
@@ -228,7 +250,7 @@ function stopRecording() {
   }
   isRecording = false;
   btnRecordAudio.classList.remove('recording');
-  micLabel.textContent = 'Processing Whisper + Gemma 4…';
+  micLabel.textContent = 'Processing Whisper + Gemma…';
   btnRecordAudio.disabled = true;
 }
 
@@ -243,6 +265,9 @@ async function processAudioWithKaggle(audioBlob) {
   try {
     const res = await fetch(`${baseUrl}/api/v1/process-audio`, {
       method: 'POST',
+      headers: {
+        'ngrok-skip-browser-warning': 'true',
+      },
       body: formData,
     });
 
@@ -261,7 +286,7 @@ async function processAudioWithKaggle(audioBlob) {
       mappedPreview.textContent = JSON.stringify(mappedEntries, null, 2);
 
       log(`Transcribed: "${transcript.substring(0, 50)}…"`, 'success');
-      log(`Mapped ${Object.keys(mappedEntries).length} entries with Gemma 4!`, 'success');
+      log(`Mapped ${Object.keys(mappedEntries).length} entries with Gemma!`, 'success');
 
       chrome.storage.local.set({ lastMappedEntries: mappedEntries });
     } else {
@@ -270,18 +295,18 @@ async function processAudioWithKaggle(audioBlob) {
   } catch (err) {
     log(`Process error: ${err.message}`, 'error');
   } finally {
-    micLabel.textContent = '2. Record Audio Response';
+    micLabel.textContent = 'Record Audio Response';
     btnRecordAudio.disabled = false;
     updateButtons();
   }
 }
 
-// ── Step 3: Fill Google Form via Content Script ────────────────────────────────
+// ── Step 3A: Option B — Direct DOM Autofill via Content Script ────────────────
 btnFill.addEventListener('click', async () => {
   btnFill.disabled = true;
   fillProgress.classList.remove('hidden');
   progressFill.style.width = '30%';
-  log('Autofilling Google Form fields…', 'info');
+  log('Autofilling Google Form fields directly…', 'info');
 
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -304,14 +329,30 @@ btnFill.addEventListener('click', async () => {
   }
 });
 
-// ── URL Save & Storage ────────────────────────────────────────────────────────
+// ── Step 3B: Option A — Open Prefilled Form URL Redirection ───────────────────
+if (btnPrefillUrl) {
+  btnPrefillUrl.addEventListener('click', () => {
+    if (!activeTabUrl || Object.keys(mappedEntries).length === 0) return;
+    try {
+      const cleanUrl = new URL(activeTabUrl.replace('/edit', '/viewform'));
+      Object.entries(mappedEntries).forEach(([entryId, value]) => {
+        if (value) cleanUrl.searchParams.set(entryId, String(value));
+      });
+      chrome.tabs.create({ url: cleanUrl.toString() });
+      log('Opened prefilled form URL in a new tab!', 'success');
+    } catch (e) {
+      log(`Error generating URL: ${e.message}`, 'error');
+    }
+  });
+}
+
 if (btnSaveUrl) {
   btnSaveUrl.addEventListener('click', () => {
     const val = backendUrlInput ? backendUrlInput.value.trim() : '';
     if (val) {
       currentBackendUrl = val;
       chrome.storage.local.set({ backendUrl: val });
-      log(`Updated backend URL to ${val}`);
+      log(`Saved backend URL: ${val}`);
       checkBackend();
     }
   });

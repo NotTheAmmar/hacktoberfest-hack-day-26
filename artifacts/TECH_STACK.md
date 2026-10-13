@@ -4,12 +4,12 @@
 
 | Layer | Technology | Purpose |
 |---|---|---|
-| Browser Integration | Chrome Extension (Manifest V3) | Tab URL extraction, audio capture via MediaRecorder, DOM autofill |
-| Speech Recognition | Whisper (OpenAI / Faster-Whisper) | Audio transcription to text |
-| Language Model | **Gemma 4** (hosted on Kaggle via ngrok) | Form field understanding, entity extraction & field mapping |
-| Backend Server | FastAPI / Python | Local testing server and/or Kaggle inference API |
-| Form Selector System | Google Forms `entry.XXXX` selectors | Reliable DOM targeting via `document.querySelector('[name="entry.XXXX"]')` |
-| Tunnels & Exposure | ngrok | Exposing Kaggle GPU notebook API to public HTTPS |
+| Browser Integration | Chrome Extension (Manifest V3) | Tab URL extraction, audio capture via MediaRecorder, DOM autofill & prefill URL generation |
+| Speech Recognition | Whisper Large-v3-Turbo (CTranslate2) | High-accuracy speech-to-text running on Kaggle GPU |
+| Language Model | **Gemma-2-2B-IT** (HuggingFace Transformers) | Instruction-following entity extraction & Google Form field mapping |
+| Backend Server | FastAPI & Uvicorn (Python 3.13) | Asynchronous REST API running inside Kaggle notebook (`reference notebook.ipynb`) |
+| Tunneling & Exposure | pyngrok | Exposing Kaggle GPU notebook API via HTTPS (`*.ngrok-free.dev` / `*.ngrok-free.app`) |
+| Form Targeting System | Google Forms `entry.<id>` selectors | Robust DOM targeting via `document.querySelector('[name="entry.XXXX"]')` and URL parameters |
 
 ---
 
@@ -17,15 +17,17 @@
 
 ### Chrome Extension (Manifest V3)
 - **Permissions:** `activeTab`, `scripting`, `storage`
-- **Host Permissions:** `https://*.ngrok-free.app/*`, `https://docs.google.com/*`, `https://forms.gle/*`, `http://localhost/*`
-- Uses browser `MediaRecorder` API directly in the extension popup for low-latency recording.
+- **Host Permissions:** `https://*.ngrok-free.dev/*`, `https://*.ngrok-free.app/*`, `https://docs.google.com/*`, `https://forms.gle/*`, `http://localhost/*`
+- **Custom Header:** Includes `ngrok-skip-browser-warning: true` on all fetch calls to bypass ngrok free tier warning pages.
+- **MediaRecorder API:** Captures WebM/WAV audio blobs natively with a $\ge$ 1 KB minimum duration guard.
 
-### Gemma 4 on Kaggle (via ngrok)
-- **Why Gemma 4:** State-of-the-art instruction-following and structured output generation. Maps natural conversational speech into accurate `{ "entry.XXXX": "value" }` JSON dictionaries matching scraped form fields.
-- **Inference Runtime:** Kaggle notebook with GPU acceleration, tunneled through ngrok.
+### Kaggle GPU Backend (`artifacts/reference notebook.ipynb`)
+- **Whisper Large-v3-Turbo:** Loaded via `faster-whisper` on CUDA with `float16` precision for fast, low-latency audio transcription.
+- **google/gemma-2-2b-it:** Loaded via `transformers` with `bfloat16` precision on CUDA for zero-shot JSON entity mapping.
+- **Endpoints:**
+  - `POST /api/v1/parse-fields`
+  - `POST /api/v1/process-audio`
 
-### Whisper Speech Recognition
-- Transcribes arbitrary audio formats (`webm`, `mp3`, `wav`, `ogg`) into clean text transcripts before passing to Gemma 4.
-
-### Autofill Strategy: Google Form Entry IDs
-Google Forms links each question to an HTML form element with a `name="entry.XXXX"` attribute. Targeting these entry IDs directly ensures robust, reliable autofill even when CSS class names vary between Google Form themes.
+### Autofill Mechanisms
+- **Option A (URL Pre-fill Redirection):** Generates clean `viewform?entry.XXXX=value` query strings for native Google Forms form prefill.
+- **Option B (Direct DOM Autofill):** Uses `filler.js` to set values on form controls and dispatches synthetic `input`, `change`, and `blur` events so Google Forms registers user entries.

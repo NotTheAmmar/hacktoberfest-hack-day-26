@@ -85,49 +85,58 @@ Output only the value — no explanation, no quotes (unless it's a JSON array)."
 
 
 def build_mapping_prompt(fields: list[dict], transcript: str) -> str:
-    fields_desc = "\n".join(f"- {f.get('id')}: {f.get('label')}" for f in fields)
-    return f"""Given the following Google Form fields:
-{fields_desc}
+    fields_str = json.dumps(fields, indent=2)
+    return f"""<start_of_turn>user
+You are an accurate automated data-entry assistant.
+Task: Map the spoken transcript into the provided form fields.
 
-And the user's speech transcript:
+Target Form Fields:
+{fields_str}
+
+Spoken Transcript:
 "{transcript}"
 
-Map the information from the transcript to the appropriate entry IDs.
-Return ONLY a valid JSON object where keys are the field IDs (e.g. "entry.123456789") and values are the extracted values.
-Do not wrap in markdown quotes if possible, output only valid JSON.
-Example output:
-{{
-  "entry.123456789": "Ammar",
-  "entry.987654321": "fever and headache"
-}}"""
+Requirements:
+1. Output ONLY a valid JSON dictionary where each key is the exact field 'id' (e.g., "entry.123456789").
+2. Format values by field type:
+   - "short_text" / "paragraph": plain text string
+   - "date": output as "YYYY-MM-DD" (e.g., "2024-10-13")
+   - "time": output as "HH:MM" in 24-hour format (e.g., "14:30" for 2:30 PM)
+   - "radio" / "dropdown": output the EXACT matching option text from the options list
+   - "checkbox": output comma-separated matching option texts (e.g., "Option A, Option C")
+   - "linear_scale": output a single number string (e.g., "3")
+3. If a field was not mentioned, omit it or set its value to "".
+4. Do not include markdown code blocks. Return the raw JSON object only.<end_of_turn>
+<start_of_turn>model
+"""
 
 
 # ── HTTP Caller ───────────────────────────────────────────────────────────────
 
 async def _call_gemma(prompt: str) -> str:
-    """Send a prompt to the Gemma 4 endpoint and return the response text."""
+    """Send a prompt to the Gemma endpoint and return the response text."""
     if not GEMMA_API_URL:
         logger.warning("GEMMA_API_URL not set — returning mock response")
-        return "[Gemma 4 not configured — please set GEMMA_API_URL in .env]"
+        return "[Gemma not configured — please set GEMMA_API_URL in .env]"
 
     url = GEMMA_API_URL + GEMMA_ENDPOINT
     is_openai_compat = "/chat/completions" in GEMMA_ENDPOINT
 
     if is_openai_compat:
         body = {
-            "model": "gemma4",
+            "model": "gemma-2-2b-it",
             "messages": [
                 {"role": "system", "content": _system_prompt()},
                 {"role": "user",   "content": prompt},
             ],
-            "max_tokens": 400,
-            "temperature": 0.2,
+            "max_tokens": 512,
+            "temperature": 0.1,
         }
     else:
         body = {
             "prompt": f"<system>{_system_prompt()}</system>\n\n{prompt}",
-            "max_tokens": 400,
-            "temperature": 0.2,
+            "max_tokens": 512,
+            "temperature": 0.1,
         }
 
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
@@ -135,14 +144,17 @@ async def _call_gemma(prompt: str) -> str:
             resp = await client.post(
                 url,
                 json=body,
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    "ngrok-skip-browser-warning": "true",
+                },
             )
             resp.raise_for_status()
             data = resp.json()
         except httpx.TimeoutException:
-            raise RuntimeError("Gemma 4 request timed out. Check your ngrok tunnel.")
+            raise RuntimeError("Gemma request timed out. Check your ngrok tunnel.")
         except httpx.HTTPStatusError as e:
-            raise RuntimeError(f"Gemma 4 API error {e.response.status_code}: {e.response.text[:200]}")
+            raise RuntimeError(f"Gemma API error {e.response.status_code}: {e.response.text[:200]}")
 
     if is_openai_compat:
         try:

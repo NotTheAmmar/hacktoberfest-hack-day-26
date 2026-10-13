@@ -122,13 +122,24 @@ async def health_check():
 # ── Root route ────────────────────────────────────────────────────────────────
 # The interview UI is served by the Chrome extension (extension/ui/index.html).
 # The backend only exposes REST API endpoints under /api/*.
+# ── Audio transcribe helper (for extension panel) ──────────────────────────────
+@app.post("/api/transcribe", tags=["audio"])
+async def transcribe_audio_endpoint(audio: UploadFile = File(...)):
+    audio_bytes = await audio.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Empty audio")
+    text = ""
+    if stt_service.is_ready:
+        text = await stt_service.transcribe(audio_bytes)
+    return {"text": text}
+
 @app.get("/", include_in_schema=False)
 async def root():
     return JSONResponse({
         "service": "Local Whisper Paperwork — Backend API",
         "docs": "/docs",
         "health": "/api/health",
-        "note": "Interview UI is served by the Chrome extension (extension/ui/index.html)",
+        "note": "Kaggle endpoints: /api/v1/parse-fields, /api/v1/process-audio",
     })
 
 

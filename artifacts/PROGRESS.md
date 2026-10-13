@@ -2,7 +2,7 @@
 
 > **Last Updated:** 2026-10-13
 
-## Current Status: ✅ Gemma 4 & Kaggle API Schema Integrated
+## Current Status: ✅ Kaggle API Schema & Reference Notebook Integrated
 
 ---
 
@@ -10,13 +10,14 @@
 
 | Phase | Status | Notes |
 |---|---|---|
-| Extension Permissions & Host Access | ✅ Complete | Manifest V3 with `https://*.ngrok-free.app/*`, `docs.google.com`, `forms.gle` |
-| Kaggle API Endpoint 1: `/parse-fields` | ✅ Complete | Scrapes form URL → extracts `{ id: "entry.XXXX", label }` |
-| Kaggle API Endpoint 2: `/process-audio` | ✅ Complete | Whisper STT + Gemma 4 entity mapping into `{ "entry.XXXX": "value" }` |
-| Extension Popup Workflow | ✅ Complete | Integrated 3-step buttons: Parse Fields → Record Audio → Fill Form |
-| DOM Autofill by Entry ID | ✅ Complete | `filler.js` targets `[name="entry.XXXX"]` directly + dispatches events |
-| Local Backend Bridge | ✅ Complete | Implemented `/api/v1/parse-fields` and `/api/v1/process-audio` in FastAPI |
-| Documentation & Testing Guide | ✅ Complete | Updated all artifacts with Kaggle schema & Gemma 4 details |
+| Extension Permissions & Host Access | ✅ Complete | Manifest V3 with `https://*.ngrok-free.dev/*`, `https://*.ngrok-free.app/*`, `docs.google.com`, `forms.gle` |
+| Critical ngrok Header | ✅ Complete | `ngrok-skip-browser-warning: true` added to all fetch requests in popup, panel, and backend |
+| Kaggle API Endpoint 1: `/parse-fields` | ✅ Complete | Scrapes form metadata → extracts `{ id: "entry.<id>", label, type, options }` matching notebook |
+| Kaggle API Endpoint 2: `/process-audio` | ✅ Complete | Whisper Large-v3-Turbo + Gemma-2-2B-IT mapping into `{ "entry.<id>": "value" }` with 1KB guard |
+| Extension Popup Workflow | ✅ Complete | 3-step action bar: Parse Fields → Record Audio → Direct Fill / Prefill URL |
+| In-Page Floating Panel | ✅ Complete | Injects interactive floating panel directly onto the Google Form |
+| DOM Autofill & URL Pre-fill | ✅ Complete | Direct DOM filling (Option B) + Pre-filled URL generation (Option A) |
+| Documentation & Testing Guide | ✅ Complete | Updated all artifacts with exact contract matching `artifacts/reference notebook.ipynb` |
 
 ---
 
@@ -24,6 +25,7 @@
 
 | Date | Decision | Rationale |
 |---|---|---|
-| 2026-10-13 | Upgraded to Gemma 4 | Superior reasoning and zero-shot entity-to-field mapping |
-| 2026-10-13 | Switched to `entry.XXXX` Kaggle schema | Direct mapping to Google Form internal names provides 100% reliable DOM targeting |
-| 2026-10-13 | Popup Audio Recording | Users can record directly from the extension popup and get instant mapped preview |
+| 2026-10-13 | Integrated `reference notebook.ipynb` specification | Aligned backend & extension to Whisper Large-v3-Turbo and Gemma-2-2B-IT contract |
+| 2026-10-13 | Added `ngrok-skip-browser-warning: true` | Bypasses ngrok interstitial HTML warning screen on free-tier subdomains |
+| 2026-10-13 | Supported both Autofill Option A and B | Allows direct DOM injection as well as native Google Form prefilled URL redirection |
+| 2026-10-13 | Added 1 KB / ~2s Audio Guard | Prevents PyAV and Whisper EOF crashes caused by empty or near-empty audio recordings |
