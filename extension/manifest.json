@@ -17,7 +17,9 @@
     "https://*.ngrok.io/*",
     "https://docs.google.com/*",
     "https://forms.gle/*",
-    "http://localhost/*"
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "<all_urls>"
   ],
 
   "background": {

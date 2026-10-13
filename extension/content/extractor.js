@@ -202,5 +202,113 @@
     return schema;
   };
 
-  console.log('[LWP Extractor] Ready. Call window.__LWP_extractForm() to extract.');
+  /**
+   * Extracts fields matching Kaggle's /api/v1/parse-fields format:
+   * [{ id: "entry.184920482", label: "Full Name", type: "short_text", options?: [...] }]
+   * Used as an instant client-side fallback if Kaggle server cannot scrape the form (e.g. auth-protected or private forms).
+   */
+  window.__LWP_getKaggleFields = function () {
+    const FIELD_MAP = {
+      0: "short_text", 1: "paragraph", 2: "radio",
+      3: "dropdown",   4: "checkbox",  5: "linear_scale",
+      7: "grid",       9: "date",     10: "time", 13: "file_upload",
+    };
+
+    // 1. Try parsing FB_PUBLIC_LOAD_DATA_ directly from scripts or window
+    try {
+      let rawData = null;
+      if (typeof window.FB_PUBLIC_LOAD_DATA_ !== 'undefined' && Array.isArray(window.FB_PUBLIC_LOAD_DATA_)) {
+        rawData = window.FB_PUBLIC_LOAD_DATA_;
+      } else {
+        const scripts = document.querySelectorAll('script');
+        for (const s of scripts) {
+          const txt = s.textContent || '';
+          if (txt.includes('FB_PUBLIC_LOAD_DATA_')) {
+            const m = txt.match(/FB_PUBLIC_LOAD_DATA_\s*=\s*(\[.*?\]);\s*(?:<\/script>|\n|var|$)/s) ||
+                      txt.match(/var\s+FB_PUBLIC_LOAD_DATA_\s*=\s*(\[.*?\]);/s);
+            if (m) {
+              rawData = JSON.parse(m[1]);
+              break;
+            }
+          }
+        }
+      }
+
+      if (rawData && rawData[1] && Array.isArray(rawData[1][1])) {
+        const questions = rawData[1][1];
+        const fields = [];
+        for (const q of questions) {
+          if (q && q.length > 4 && q[4] && q[4][0]) {
+            const label = q[1];
+            const typeCode = q[3];
+            const fieldType = FIELD_MAP[typeCode] || "short_text";
+            const entryId = `entry.${q[4][0][0]}`;
+            const item = { id: entryId, label, type: fieldType };
+
+            if ([2, 3, 4].includes(typeCode) && q[4][0].length > 1 && q[4][0][1]) {
+              item.options = q[4][0][1].filter(opt => opt && opt[0]).map(opt => opt[0]);
+            }
+            fields.push(item);
+          }
+        }
+        if (fields.length > 0) {
+          console.log('[LWP Extractor] Client extracted fields from FB_PUBLIC_LOAD_DATA_:', fields);
+          return fields;
+        }
+      }
+    } catch (err) {
+      console.warn('[LWP Extractor] Failed extracting from script metadata, falling back to DOM:', err);
+    }
+
+    // 2. DOM inspection fallback
+    const fields = [];
+    const seenIds = new Set();
+
+    // Check containers with data-params
+    const containers = document.querySelectorAll('[data-params*="%.@.["]');
+    containers.forEach((c) => {
+      const params = c.getAttribute('data-params');
+      const idMatch = params ? params.match(/\[(\d{6,12})/) : null;
+      if (idMatch && !seenIds.has(idMatch[1])) {
+        seenIds.add(idMatch[1]);
+        const entryId = `entry.${idMatch[1]}`;
+        const labelEl = c.querySelector('[role="heading"]') ||
+                        c.querySelector('.freebirdFormviewerComponentsQuestionBaseTitle') ||
+                        c.querySelector('[data-item-id]');
+        const label = (labelEl?.textContent || 'Question').replace(/\s*\*$/, '').trim();
+
+        let type = 'short_text';
+        if (c.querySelector('textarea')) type = 'paragraph';
+        else if (c.querySelector('[role="radio"]')) type = 'radio';
+        else if (c.querySelector('[role="checkbox"]')) type = 'checkbox';
+        else if (c.querySelector('select, [role="listbox"]')) type = 'dropdown';
+
+        const item = { id: entryId, label, type };
+        if (type === 'radio' || type === 'checkbox') {
+          const opts = Array.from(c.querySelectorAll('[role="radio"], [role="checkbox"]'))
+            .map(el => el.getAttribute('aria-label') || el.textContent.trim())
+            .filter(Boolean);
+          if (opts.length > 0) item.options = opts;
+        }
+        fields.push(item);
+      }
+    });
+
+    // Check direct input[name^="entry."]
+    document.querySelectorAll('input[name^="entry."], textarea[name^="entry."]').forEach((inp) => {
+      const name = inp.getAttribute('name');
+      if (name && !seenIds.has(name)) {
+        seenIds.add(name);
+        const container = inp.closest('[role="listitem"]') || inp.parentElement;
+        const labelEl = container?.querySelector('[role="heading"]') || container?.querySelector('label');
+        const label = (labelEl?.textContent || name).replace(/\s*\*$/, '').trim();
+        fields.push({ id: name, label, type: inp.tagName === 'TEXTAREA' ? 'paragraph' : 'short_text' });
+      }
+    });
+
+    console.log('[LWP Extractor] Client extracted fields from DOM:', fields);
+    return fields;
+  };
+
+  console.log('[LWP Extractor] Ready. Call window.__LWP_extractForm() or window.__LWP_getKaggleFields().');
 })();

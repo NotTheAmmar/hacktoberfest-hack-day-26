@@ -242,16 +242,20 @@
 
     // Backend health
     try {
-      const res  = await fetch(`${BACKEND}/api/health`, {
+      const res = await fetch(`${BACKEND}/api/v1/parse-fields`, {
+        method: 'OPTIONS',
         headers: { 'ngrok-skip-browser-warning': 'true' },
-        signal: AbortSignal.timeout(3000)
-      });
-      const data = await res.json();
-      $('lwp-backend-dot').className  = 'lwp-dot green';
-      $('lwp-backend-text').textContent = `Backend ready (${data.whisper_model ?? 'whisper'})`;
+        signal: AbortSignal.timeout(3500)
+      }).catch(() => null);
+      if (res && (res.ok || res.status === 200 || res.status === 405)) {
+        $('lwp-backend-dot').className  = 'lwp-dot green';
+        $('lwp-backend-text').textContent = 'Kaggle backend connected';
+      } else {
+        throw new Error('Not reachable');
+      }
     } catch {
       $('lwp-backend-dot').className  = 'lwp-dot red';
-      $('lwp-backend-text').textContent = 'Cannot reach localhost:8000';
+      $('lwp-backend-text').textContent = 'Cannot reach backend';
     }
   }
 
@@ -263,25 +267,43 @@
     btnPrimary.disabled    = true;
 
     try {
-      const schema = window.__LWP_extractForm?.();
-      if (!schema?.questions?.length) throw new Error('No questions found. Is this a Google Form?');
-
-      const res = await fetch(`${BACKEND}/api/form-schema`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': 'true',
-        },
-        body: JSON.stringify(schema),
-      });
-
-      if (!res.ok) {
-        const e = await res.json().catch(() => ({}));
-        throw new Error(e.detail ?? `Backend error ${res.status}`);
+      let fields = [];
+      try {
+        const res = await fetch(`${BACKEND}/api/v1/parse-fields`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'ngrok-skip-browser-warning': 'true',
+          },
+          body: JSON.stringify({ url: window.location.href }),
+          signal: AbortSignal.timeout(10000),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.fields)) fields = data.fields;
+        }
+      } catch (e) {
+        console.warn('[LWP Panel] Remote parse-fields failed, falling back to local DOM extractor:', e);
       }
 
-      const saved = await res.json();
-      state.schema = saved.schema ?? schema;
+      if (!fields.length && window.__LWP_getKaggleFields) {
+        fields = window.__LWP_getKaggleFields();
+      }
+
+      const schema = window.__LWP_extractForm?.() || { questions: [] };
+      if (fields.length) {
+        schema.questions = fields.map((f, i) => ({
+          id: f.id,
+          label: f.label,
+          type: f.type || 'short_text',
+          options: f.options,
+          index: i
+        }));
+      }
+
+      if (!schema?.questions?.length) throw new Error('No questions found. Is this a Google Form?');
+
+      state.schema = schema;
       $('lwp-q-count').textContent = `${state.schema.questions.length} questions`;
       statusEl.textContent = '✓ Form extracted successfully';
       statusEl.style.color = '#34d399';
@@ -413,32 +435,39 @@
 
     try {
       const blob = new Blob(state.audioChunks, { type: 'audio/webm' });
-      const form = new FormData();
-      form.append('audio', blob, 'recording.webm');
+      if (blob.size < 1000) {
+        $('lwp-voice-status').textContent = 'Too short (<2s). Speak longer.';
+        return;
+      }
 
-      const res  = await fetch(`${BACKEND}/api/transcribe`, {
+      const q = state.schema?.questions?.[state.currentQIndex];
+      const targetFields = q ? [{ id: q.id, label: q.label || q.title || 'Question', type: q.type || 'short_text', options: q.options }] : [];
+      const form = new FormData();
+      form.append('audio_file', blob, 'recording.webm');
+      form.append('fields_json', JSON.stringify(targetFields));
+
+      const res = await fetch(`${BACKEND}/api/v1/process-audio`, {
         method: 'POST',
         headers: { 'ngrok-skip-browser-warning': 'true' },
         body: form,
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(30000),
       });
       const data = await res.json();
-      const text = data.text?.trim();
+      const mapped = data.mapped_entries || {};
+      const text = (q && mapped[q.id]) || data.transcript?.trim() || '';
 
       if (text) {
-        const q = state.schema?.questions[state.currentQIndex];
         if (q) {
           state.answers[q.id] = text;
-          // Update textarea if present
           const ta = $('lwp-answer-area')?.querySelector('.lwp-textarea');
           if (ta) ta.value = text;
         }
         $('lwp-voice-status').textContent = `✓ "${text.slice(0, 40)}${text.length > 40 ? '…' : ''}"`;
       } else {
-        $('lwp-voice-status').textContent = 'Could not transcribe audio';
+        $('lwp-voice-status').textContent = 'Could not map answer';
       }
-    } catch {
-      $('lwp-voice-status').textContent = 'Transcription failed — check backend';
+    } catch (err) {
+      $('lwp-voice-status').textContent = `Failed: ${err.message || 'check backend'}`;
     }
   }
 
@@ -457,7 +486,7 @@
       const item = document.createElement('div');
       item.className = 'lwp-review-item';
       item.innerHTML = `
-        <div class="lwp-review-q">Q${i + 1}. ${q.title || q.text}${q.required ? ' <span style="color:#f87171">*</span>' : ''}</div>
+        <div class="lwp-review-q">Q${i + 1}. ${q.label || q.title || q.text}${q.required ? ' <span style="color:#f87171">*</span>' : ''}</div>
         <div class="lwp-review-a">${hasAns ? (Array.isArray(ans) ? ans.join(', ') : ans) : '<span style="color:#475569;font-style:italic;">No answer</span>'}</div>
         <button class="lwp-review-edit" data-index="${i}">Edit →</button>
       `;
@@ -484,21 +513,7 @@
     $('lwp-fill-result').style.display = 'none';
 
     try {
-      // Push final answers to backend
-      const payload = { answers: state.answers, form_id: state.schema?.formId };
-      const res = await fetch(`${BACKEND}/api/autofill-data`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': 'true',
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const autofillData = res.ok
-        ? await res.json()
-        : { answers: state.answers };
-
+      const autofillData = { mapped_entries: state.answers, answers: state.answers };
       // Fill using the injected filler
       const result = window.__LWP_fillForm?.(autofillData) ?? { filled: 0, total: 0 };
 

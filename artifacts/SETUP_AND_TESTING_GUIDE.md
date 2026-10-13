@@ -141,45 +141,47 @@ curl -X POST https://<YOUR-NGROK-SUBDOMAIN>.ngrok-free.dev/api/v1/process-audio 
 ## Part 3: Running the End-to-End Workflow
 
 ```
-┌────────────────────┐      ┌─────────────────────┐      ┌──────────────────────┐      ┌────────────────────┐
-│ 1. Open Google Form│ ───► │ 2. Parse Fields     │ ───► │ 3. Record Voice      │ ───► │ 4. Autofill Form   │
-│    Active Tab      │      │    POST /parse-field│      │    Whisper + Gemma   │      │    Direct / Pre-fill│
-└────────────────────┘      └─────────────────────┘      └──────────────────────┘      └────────────────────┘
+┌────────────────────┐      ┌─────────────────────────────┐      ┌──────────────────────┐      ┌────────────────────┐
+│ 1. Open Google Form│ ───► │ 2. Auto-Detects & Parses    │ ───► │ 3. Tap to Record     │ ───► │ 4. Autofill Form   │
+│    Active Tab      │      │    /api/v1/parse-fields     │      │    Whisper + Gemma 2 │      │    Direct / Pre-fill│
+└────────────────────┘      └─────────────────────────────┘      └──────────────────────┘      └────────────────────┘
 ```
 
-### Step 1: Open Form & Configure Backend URL
+### Step 1: Open Form & Verify Backend URL
 1. In Chrome, open any Google Form tab (e.g. `https://docs.google.com/forms/d/e/.../viewform`).
-2. Click the **Local Whisper Paperwork** icon in the toolbar.
-3. In the **Backend URL** input, enter your Kaggle ngrok URL:
+2. Click the **Local Whisper Paperwork** icon in the Chrome toolbar.
+3. Verify your Kaggle ngrok URL at the top:
    ```text
    https://<YOUR-NGROK-SUBDOMAIN>.ngrok-free.dev
    ```
-   *(Or `http://localhost:8000` if running the local Python mock backend)*.
-4. Click the 💾 (Save) button. The status dot will turn green.
+   *(The default placeholder is `https://rewrite-climatic-shredder.ngrok-free.dev` from the reference notebook)*.
+4. Click **Connect** (or press Enter). The status indicator turns green (🟢 Connected: `<domain>`).
 
-### Step 2: Parse Form Fields
-1. Click **1. Parse Form Fields**.
-2. The extension requests `/api/v1/parse-fields` using the current tab URL.
-3. The badge updates with the detected field count (e.g., `3 fields`).
+### Step 2: Automatic Form Detection & Field Scraping
+1. The extension automatically detects the Google Form tab and calls `/api/v1/parse-fields` in the background.
+2. The detected questions are displayed as badges/chips (e.g. `Full Name`, `Department`, `Incident Date`).
+3. *(Fallback: If the form is private or requires sign-in, the extension automatically extracts the questions and `entry.<id>` fields directly from the browser tab DOM).*
 
-### Step 3: Record Voice Response
-1. Click **2. Record Audio Response** (grant microphone permission if prompted).
-2. Speak your answers clearly for at least 2 seconds (e.g., *"My name is Vishvambar and I work in Engineering. The incident date was 2026-10-13."*).
-3. Click the button again to stop.
-4. The extension sends the audio file to `/api/v1/process-audio` with the `ngrok-skip-browser-warning: true` header.
-5. Whisper transcribes the voice note and Gemma maps the answers to their respective `entry.<id>` keys.
-6. The transcript and mapped JSON entries are displayed in the preview card!
+### Step 3: Record Voice Response (Hero Action)
+1. Tap the central **Tap to Speak Answers** button.
+2. Speak your answers naturally (grant microphone permission if prompted).
+   - *Example:* "My name is John Doe and I work in Engineering. The incident date was 2026-10-13."
+3. Watch the live recording timer. Ensure you speak for at least **2 seconds** (Kaggle backend requires $\ge 1\text{ KB}$ audio).
+4. Tap the button again when finished.
+5. The extension uploads the audio to `/api/v1/process-audio` with the header `ngrok-skip-browser-warning: true`.
+6. Whisper transcribes your voice, and Gemma 2 maps the answers to the exact Google Form entry IDs.
+7. The transcript and mapped fields are rendered immediately in the results card!
 
 ### Step 4: Autofill the Form
-You have two autofill options:
+Choose either method:
 
-#### Option A: Direct DOM Autofill (Step 3A)
-- Click **Fill Form Directly**.
-- The extension automatically populates inputs, textareas, radios, checkboxes, and dropdowns right inside your open tab.
+#### Option A: Direct DOM Autofill (Primary)
+- Click **⚡ Autofill Form**.
+- The extension automatically injects text, selects radio options, checks checkboxes, and chooses dropdown values right inside the active tab.
 
-#### Option B: Pre-filled URL Redirection (Step 3B)
-- Click **Open Prefilled Form URL**.
-- Opens a new tab with the URL parameters appended (`?entry.184920482=Vishvambar&...`), allowing Google Forms to pre-fill the form natively.
+#### Option B: Pre-filled URL Redirection (Secondary)
+- Click **🔗 Prefilled URL**.
+- Opens a new tab with the URL parameters appended (`?entry.184920482=John+Doe&...`), leveraging Google Forms' native prefill mechanism.
 
 ---
 

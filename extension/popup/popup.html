@@ -14,7 +14,7 @@
   <header class="header">
     <div class="header-brand">
       <div class="brand-icon">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
           <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
           <line x1="12" y1="19" x2="12" y2="22"/>
@@ -22,27 +22,25 @@
       </div>
       <div>
         <div class="brand-name">Whisper Paperwork</div>
-        <div class="brand-tagline">Voice → Form filling</div>
+        <div class="brand-tagline">Kaggle Voice AI • Whisper + Gemma 2</div>
       </div>
     </div>
-    <div style="display: flex; align-items: center; gap: 6px;">
-      <div id="tab-pill" class="tab-pill tab-pill--checking">
-        <span class="tab-pill__dot"></span>
-        <span id="tab-pill-text">Checking…</span>
-      </div>
-      <button id="btn-toggle-settings" class="icon-btn" title="Backend URL Settings" style="padding: 4px;">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="3"/>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-        </svg>
-      </button>
+    <div id="tab-pill" class="tab-pill tab-pill--checking">
+      <span class="tab-pill__dot"></span>
+      <span id="tab-pill-text">Checking…</span>
     </div>
   </header>
 
-  <!-- ── Settings card (Collapsible) ────────────────────────── -->
-  <section class="card hidden" id="section-settings">
-    <div class="card-label">Kaggle ngrok Backend URL</div>
-    <div class="url-row">
+  <!-- ── Kaggle Backend Configuration Card ──────────────────── -->
+  <section class="card card--backend" id="section-backend">
+    <div class="card-header-row">
+      <span class="card-label">Kaggle Backend (ngrok URL)</span>
+      <span class="status-indicator" id="backend-status-indicator">
+        <span class="status-dot" id="backend-dot" data-state="checking"></span>
+        <span class="status-text" id="backend-text">Connecting…</span>
+      </span>
+    </div>
+    <div class="url-input-group">
       <input
         type="text"
         id="backend-url-input"
@@ -51,96 +49,121 @@
         autocomplete="off"
         spellcheck="false"
       />
-      <button id="btn-save-url" class="icon-btn" title="Save URL">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-      </button>
-    </div>
-    <div class="backend-status-row" style="margin-top: 6px;">
-      <div class="status-dot" id="backend-dot" data-state="checking"></div>
-      <span class="status-text" id="backend-text">Connecting…</span>
-      <button id="btn-retry-backend" class="icon-btn icon-btn--sm" title="Test Connection">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-      </button>
+      <button id="btn-save-url" class="btn-connect" title="Save URL & Connect">Connect</button>
     </div>
   </section>
 
-
-  <!-- ── Form info card ──────────────────────────────────────── -->
+  <!-- ── Detected Form & Auto-Parsed Fields Card ─────────────── -->
   <section class="card" id="section-form">
-    <div class="card-label">Detected Form</div>
-    <div class="form-row">
-      <span class="form-title" id="form-title-text">No form on this tab</span>
-      <span class="field-badge" id="form-question-count">0 fields</span>
+    <div class="card-header-row">
+      <span class="card-label">Detected Google Form</span>
+      <button id="btn-reparse" class="icon-btn-ghost" title="Re-parse Form">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="form-info-box">
+      <div class="form-title" id="form-title-text">Detecting active form…</div>
+      <div class="form-status-badge" id="form-fields-badge">0 questions</div>
+    </div>
+
+    <!-- Parsed field chips preview -->
+    <div class="fields-preview-container" id="fields-preview-container">
+      <div class="fields-loading" id="fields-loading">
+        <span class="spinner-sm"></span> Parsing questions from form…
+      </div>
+      <div class="fields-chip-list hidden" id="fields-chip-list"></div>
     </div>
   </section>
 
-  <!-- ── Actions ────────────────────────────────────────────── -->
-  <section class="actions-section">
+  <!-- ── Hero Voice Intake Card ─────────────────────────────── -->
+  <section class="hero-voice-section" id="section-voice">
+    <div class="mic-container">
+      <button id="btn-record-hero" class="record-hero-btn" disabled>
+        <div class="mic-wave-pulse" id="mic-wave-pulse"></div>
+        <div class="mic-icon-circle">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="22"/>
+          </svg>
+        </div>
+        <div class="record-btn-info">
+          <div class="record-main-label" id="record-main-label">Tap to Speak Answers</div>
+          <div class="record-sub-label" id="record-sub-label">Speak your answers naturally</div>
+        </div>
+        <div class="record-timer-badge hidden" id="record-timer-badge">00:00</div>
+      </button>
+    </div>
 
-    <button id="btn-parse-fields" class="action-btn" disabled>
-      <span class="action-btn__icon">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="8 17 12 21 16 17"/><line x1="12" y1="21" x2="12" y2="3"/></svg>
-      </span>
-      <span class="action-btn__label">Parse Form Fields</span>
-      <span class="action-btn__step">Step 1</span>
-    </button>
-
-    <button id="btn-record-audio" class="action-btn" disabled>
-      <span class="action-btn__icon" id="mic-icon">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
-      </span>
-      <span class="action-btn__label" id="mic-label">Record Audio Response</span>
-      <span class="action-btn__step">Step 2</span>
-    </button>
-
-    <button id="btn-open-panel" class="action-btn action-btn--highlight">
-      <span class="action-btn__icon">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
-      </span>
-      <span class="action-btn__label">Open Interview Panel</span>
-      <span class="action-btn__step">On page</span>
-    </button>
-
-    <button id="btn-fill" class="action-btn action-btn--success" disabled>
-      <span class="action-btn__icon">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
-      </span>
-      <span class="action-btn__label">Fill Form Directly</span>
-      <span class="action-btn__step">Step 3A</span>
-    </button>
-
-    <button id="btn-prefill-url" class="action-btn" disabled>
-      <span class="action-btn__icon">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-      </span>
-      <span class="action-btn__label">Open Prefilled Form URL</span>
-      <span class="action-btn__step">Step 3B</span>
-    </button>
-
+    <div class="voice-instruction" id="voice-instruction">
+      Whisper transcribes audio & Gemma 2 maps answers directly to form fields.
+    </div>
   </section>
 
-  <!-- ── Transcript result ───────────────────────────────────── -->
-  <div id="result-box" class="result-box hidden">
-    <div class="result-row">
-      <span class="result-label">Transcript</span>
-      <div id="transcript-preview" class="result-content"></div>
+  <!-- ── Results & Autofill Card ────────────────────────────── -->
+  <section class="card results-card hidden" id="section-results">
+    <div class="card-header-row">
+      <span class="card-label">Extracted Results</span>
+      <span class="field-badge field-badge--success" id="mapped-count-badge">0 mapped</span>
     </div>
-    <div class="result-row" style="margin-top: 6px;">
-      <span class="result-label">Mapped</span>
-      <div id="mapped-preview" class="result-content result-content--mono"></div>
-    </div>
-  </div>
 
-  <!-- ── Fill progress ──────────────────────────────────────── -->
+    <!-- Whisper Transcript -->
+    <div class="result-block">
+      <div class="result-block-title">Whisper Transcript</div>
+      <div class="transcript-box" id="transcript-text"></div>
+    </div>
+
+    <!-- Gemma 2 Mapped Fields -->
+    <div class="result-block">
+      <div class="result-block-title">Gemma 2 Field Mapping</div>
+      <div class="mapped-list" id="mapped-list"></div>
+    </div>
+
+    <!-- Autofill Action Buttons -->
+    <div class="results-actions">
+      <button id="btn-autofill" class="btn-primary">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+        <span>Autofill Form</span>
+      </button>
+      <button id="btn-prefill-url" class="btn-secondary" title="Open prefilled URL in new tab">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+          <polyline points="15 3 21 3 21 9"/>
+          <line x1="10" y1="14" x2="21" y2="3"/>
+        </svg>
+        <span>Prefilled URL</span>
+      </button>
+    </div>
+  </section>
+
+  <!-- ── Fill Progress Bar ──────────────────────────────────── -->
   <div id="fill-progress" class="fill-progress hidden">
     <div class="progress-track">
       <div id="progress-fill" class="progress-bar-fill" style="width: 0%"></div>
     </div>
-    <span id="progress-text" class="progress-label">Filling…</span>
+    <span id="progress-text" class="progress-label">Autofilling form…</span>
   </div>
 
-  <!-- ── Log ────────────────────────────────────────────────── -->
-  <div id="log" class="log"></div>
+  <!-- ── Footer & Quick Actions ─────────────────────────────── -->
+  <footer class="footer">
+    <button id="btn-open-panel" class="footer-link-btn">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/>
+      </svg>
+      <span>Open in-page floating panel</span>
+    </button>
+    <button id="btn-toggle-log" class="footer-link-btn" style="margin-left: auto;">
+      <span>Log</span>
+    </button>
+  </footer>
+
+  <!-- ── Debug Log ──────────────────────────────────────────── -->
+  <div id="log" class="log hidden"></div>
 
   <script src="popup.js"></script>
 </body>

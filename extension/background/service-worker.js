@@ -5,7 +5,12 @@
  * All chrome.tabs / chrome.scripting calls must happen here (not in popup).
  */
 
-const BACKEND = 'http://localhost:8000';
+let BACKEND = 'https://rewrite-climatic-shredder.ngrok-free.dev';
+if (typeof chrome !== 'undefined' && chrome?.storage?.local) {
+  chrome.storage.local.get(['backendUrl'], (res) => {
+    if (res?.backendUrl) BACKEND = res.backendUrl.replace(/\/+$/, '');
+  });
+}
 
 // ── Message Handler ───────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
