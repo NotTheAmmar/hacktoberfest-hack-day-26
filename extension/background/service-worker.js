@@ -18,6 +18,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     handleFill(message.payload, sendResponse);
     return true;
   }
+
+  if (message.type === 'OPEN_PANEL') {
+    handleOpenPanel(sendResponse);
+    return true;
+  }
 });
 
 // ── Extract Form ──────────────────────────────────────────────────────────────
@@ -74,6 +79,30 @@ async function handleFill(autofillData, sendResponse) {
 
   } catch (err) {
     console.error('[LWP service-worker] Fill error:', err);
+    sendResponse({ success: false, error: err.message });
+  }
+}
+
+// ── Open Panel ────────────────────────────────────────────────────────────────
+async function handleOpenPanel(sendResponse) {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) throw new Error('No active tab');
+
+    const url = tab.url || '';
+    if (!url.match(/^https:\/\/docs\.google\.com\/forms\//)) {
+      throw new Error('Please navigate to a Google Form first.');
+    }
+
+    // Inject the panel script into the active tab
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ['content/panel.js'],
+    });
+
+    sendResponse({ success: true });
+  } catch (err) {
+    console.error('[LWP] Open panel error:', err);
     sendResponse({ success: false, error: err.message });
   }
 }

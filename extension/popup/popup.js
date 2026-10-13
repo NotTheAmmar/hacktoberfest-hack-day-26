@@ -132,9 +132,27 @@ btnExtract.addEventListener('click', async () => {
   }
 });
 
-// ── Open Interview UI ─────────────────────────────────────────────────────────
-btnOpenUI.addEventListener('click', () => {
-  chrome.tabs.create({ url: `${BACKEND}` });
+// ── Open Interview Panel (injected into the Google Form page) ────────────────
+btnOpenUI.addEventListener('click', async () => {
+  btnOpenUI.disabled = true;
+  btnOpenUI.textContent = 'Opening…';
+  log('Injecting interview panel on the form…');
+
+  try {
+    const res = await chrome.runtime.sendMessage({ type: 'OPEN_PANEL' });
+    if (res?.success) {
+      log('Panel opened on the form page ✓', 'success');
+      window.close(); // close popup so panel is visible
+    } else {
+      log(`Failed: ${res?.error ?? 'unknown error'}`, 'error');
+      btnOpenUI.disabled = false;
+      btnOpenUI.textContent = 'Open Interview';
+    }
+  } catch (err) {
+    log(`Error: ${err.message}`, 'error');
+    btnOpenUI.disabled = false;
+    btnOpenUI.textContent = 'Open Interview';
+  }
 });
 
 // ── Fill form ─────────────────────────────────────────────────────────────────
