@@ -14,45 +14,122 @@
   'use strict';
 
   function triggerEvents(element) {
-    ['focus', 'input', 'change', 'blur'].forEach(evtType => {
-      element.dispatchEvent(new Event(evtType, { bubbles: true }));
+    if (!element) return;
+    ['focus', 'keydown', 'keypress', 'input', 'keyup', 'change', 'blur'].forEach(evtType => {
+      try {
+        element.dispatchEvent(new Event(evtType, { bubbles: true, composed: true }));
+      } catch (e) {}
     });
   }
 
   function setInputValue(input, value) {
     if (!input) return false;
+    const strVal = String(value ?? '');
     input.focus();
-    input.value = '';
 
-    // React/Angular execCommand simulation
+    // 1. Native prototype setter to bypass framework state traps
+    const proto = input.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+    if (nativeSetter) {
+      nativeSetter.call(input, strVal);
+    } else {
+      input.value = strVal;
+    }
+
+    // 2. React / Google Closure execCommand simulation
     if (document.execCommand) {
       try {
-        document.execCommand('insertText', false, String(value));
+        document.execCommand('selectAll', false, null);
+        document.execCommand('insertText', false, strVal);
       } catch (e) {}
     }
 
-    if (input.value !== String(value)) {
-      const proto = input.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-      const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-      if (nativeSetter) {
-        nativeSetter.call(input, String(value));
-      } else {
-        input.value = String(value);
-      }
-      triggerEvents(input);
-    }
+    // Ensure value is set
+    input.value = strVal;
+
+    // 3. Always dispatch standard input & change events
+    triggerEvents(input);
     return true;
   }
 
   /**
-   * Fills an individual entry using its Google Form entry.XXXX ID.
+   * Helper to fill an element container (handles text, radio, checkbox, dropdown)
+   */
+  function fillContainer(container, strVal) {
+    if (!container || !strVal) return false;
+
+    // A. Radio buttons
+    const radios = container.querySelectorAll('[role="radio"]');
+    if (radios.length > 0) {
+      const lower = strVal.toLowerCase();
+      for (const r of radios) {
+        const label = (r.getAttribute('aria-label') || r.getAttribute('data-value') || r.textContent || '').trim().toLowerCase();
+        if (label === lower || label.includes(lower) || lower.includes(label)) {
+          r.focus();
+          r.click();
+          try {
+            r.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+            r.dispatchEvent(new Event('change', { bubbles: true }));
+          } catch (e) {}
+          return true;
+        }
+      }
+    }
+
+    // B. Checkboxes (comma-separated or single)
+    const checkboxes = container.querySelectorAll('[role="checkbox"]');
+    if (checkboxes.length > 0) {
+      const targetValues = strVal.split(',').map(s => s.trim().toLowerCase());
+      let matched = false;
+      for (const cb of checkboxes) {
+        const label = (cb.getAttribute('aria-label') || cb.getAttribute('data-value') || cb.textContent || '').trim().toLowerCase();
+        const shouldCheck = targetValues.some(t => label === t || label.includes(t) || t.includes(label));
+        if (shouldCheck) {
+          const isChecked = cb.getAttribute('aria-checked') === 'true';
+          if (!isChecked) {
+            cb.click();
+            try {
+              cb.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+              cb.dispatchEvent(new Event('change', { bubbles: true }));
+            } catch (e) {}
+          }
+          matched = true;
+        }
+      }
+      if (matched) return true;
+    }
+
+    // C. Dropdown / Select
+    const select = container.querySelector('select');
+    if (select) {
+      const lower = strVal.toLowerCase();
+      for (const opt of select.options) {
+        if (opt.text.trim().toLowerCase() === lower || opt.text.trim().toLowerCase().includes(lower)) {
+          select.value = opt.value;
+          triggerEvents(select);
+          return true;
+        }
+      }
+    }
+
+    // D. Direct input or textarea inside container
+    const input = container.querySelector('input:not([type="hidden"]), textarea');
+    if (input && input.type !== 'radio' && input.type !== 'checkbox') {
+      return setInputValue(input, strVal);
+    }
+
+    return false;
+  }
+
+  /**
+   * Fills an individual entry using its Google Form entry.XXXX ID or field label.
    */
   function fillByEntryId(entryId, value) {
-    const cleanId = String(entryId).trim();
-    const strVal = String(value).trim();
-    if (!strVal) return false;
+    const cleanId = String(entryId || '').trim();
+    const strVal = String(value || '').trim();
+    if (!cleanId || !strVal) return false;
 
-    // 1. Direct match: <input name="entry.123456789"> or <textarea name="entry.123456789">
+    // 1. Direct match by name attribute: <input name="entry.123456789">
     const directInput = document.querySelector(`input[name="${cleanId}"], textarea[name="${cleanId}"]`);
     if (directInput) {
       if (directInput.type === 'radio') {
@@ -74,7 +151,6 @@
         });
         if (clicked) return true;
       }
-
       return setInputValue(directInput, strVal);
     }
 
@@ -84,51 +160,20 @@
     if (numId) {
       container = document.querySelector(`[data-params*="${numId}"]`) ||
                   document.querySelector(`[data-item-id="${numId}"]`);
+      if (container && fillContainer(container, strVal)) {
+        return true;
+      }
     }
 
-    if (container) {
-      // Direct text or textarea inside container
-      const input = container.querySelector('input:not([type="hidden"]), textarea');
-      if (input && input.type !== 'radio' && input.type !== 'checkbox') {
-        return setInputValue(input, strVal);
-      }
-
-      // Radio button group
-      const radios = container.querySelectorAll('[role="radio"]');
-      if (radios.length > 0) {
-        for (const r of radios) {
-          const label = (r.getAttribute('aria-label') || r.getAttribute('data-value') || r.textContent || '').trim().toLowerCase();
-          if (label === strVal.toLowerCase() || label.includes(strVal.toLowerCase())) {
-            r.click();
-            return true;
-          }
-        }
-      }
-
-      // Checkbox group (supports comma-separated multiple options)
-      const checkboxes = container.querySelectorAll('[role="checkbox"]');
-      if (checkboxes.length > 0) {
-        const targetValues = strVal.split(',').map(s => s.trim().toLowerCase());
-        let count = 0;
-        for (const cb of checkboxes) {
-          const label = (cb.getAttribute('aria-label') || cb.getAttribute('data-value') || cb.textContent || '').trim().toLowerCase();
-          const shouldCheck = targetValues.some(t => label === t || label.includes(t));
-          if (shouldCheck) {
-            const isChecked = cb.getAttribute('aria-checked') === 'true';
-            if (!isChecked) cb.click();
-            count++;
-          }
-        }
-        if (count > 0) return true;
-      }
-
-      // Dropdown / Combobox
-      const select = container.querySelector('select');
-      if (select) {
-        for (const opt of select.options) {
-          if (opt.text.trim().toLowerCase() === strVal.toLowerCase()) {
-            select.value = opt.value;
-            triggerEvents(select);
+    // 3. Fallback: Search question container by label / heading text
+    const targetLabel = cleanId.toLowerCase().replace(/^entry\.\d+\s*[-:]?\s*/, '').trim();
+    if (targetLabel) {
+      const items = document.querySelectorAll('[role="listitem"], .Qr7Oae, .freebirdFormviewerComponentsQuestionBaseRoot');
+      for (const item of items) {
+        const heading = item.querySelector('[role="heading"], .M7eMe, .freebirdFormviewerComponentsQuestionBaseTitle');
+        const headingText = (heading?.textContent || '').toLowerCase().trim();
+        if (headingText && (headingText === targetLabel || headingText.includes(targetLabel) || targetLabel.includes(headingText))) {
+          if (fillContainer(item, strVal)) {
             return true;
           }
         }

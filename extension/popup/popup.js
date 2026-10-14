@@ -217,29 +217,41 @@ function renderCurrentQuestion() {
   recordMainLabel.textContent = 'Tap to Speak Answer';
   recordSubLabel.textContent = `Recording answer for question ${qNum} of ${total}`;
 
-  // 3. If field.options exists, map them as quick visual chips directly below the microphone button
+  // 3. Option pills: collect choices from fields in this group
   if (optionsContainer && optionsChipsList) {
-    if (q.options && Array.isArray(q.options) && q.options.length > 0) {
+    let optionsList = [];
+    if (q.target_fields && Array.isArray(q.target_fields)) {
+      q.target_fields.forEach(f => {
+        if (f.options && Array.isArray(f.options) && f.options.length > 0) {
+          f.options.forEach(opt => {
+            optionsList.push({ fieldId: f.id, fieldLabel: f.label, opt });
+          });
+        }
+      });
+    } else if (q.options && Array.isArray(q.options) && q.options.length > 0) {
+      optionsList = q.options.map(opt => ({ fieldId: q.id, fieldLabel: q.label, opt }));
+    }
+
+    if (optionsList.length > 0) {
       optionsChipsList.innerHTML = '';
-      q.options.forEach(opt => {
+      optionsList.forEach(item => {
         const pill = document.createElement('button');
         pill.className = 'option-pill';
         pill.type = 'button';
-        pill.textContent = opt;
+        pill.textContent = item.opt;
 
-        if (allAnswers[q.id] === opt) {
+        if (allAnswers[item.fieldId] === item.opt) {
           pill.classList.add('selected');
         }
 
         pill.addEventListener('click', () => {
-          allAnswers[q.id]     = opt;
-          allTranscripts[q.id] = opt;
-          mappedEntries        = allAnswers;
-          log(`Selected option "${opt}" for ${q.label}`, 'success');
-          renderResults(`Selected option: ${opt}`, allAnswers);
-          chrome.storage.local.set({ lastMappedEntries: allAnswers });
-          currentQuestionIndex++;
-          renderCurrentQuestion();
+          allAnswers[item.fieldId] = item.opt;
+          if (item.fieldLabel) allAnswers[item.fieldLabel] = item.opt;
+          mappedEntries = allAnswers;
+          log(`Selected option "${item.opt}" for ${item.fieldLabel || item.fieldId}`, 'success');
+          renderResults(`Selected option: ${item.opt}`, allAnswers);
+          renderFieldChips();
+          pill.classList.add('selected');
         });
 
         optionsChipsList.appendChild(pill);
@@ -252,15 +264,7 @@ function renderCurrentQuestion() {
   }
 
   // Helper instruction below
-  if (q.options && q.options.length > 0) {
-    voiceInstruction.textContent = 'Speak your choice into the mic, or tap an option pill above.';
-  } else if (q.type === 'date') {
-    voiceInstruction.textContent = 'Say a date (e.g., "Tomorrow", "October 13th 2026").';
-  } else if (q.type === 'time') {
-    voiceInstruction.textContent = 'Say a time (e.g., "2:30 PM", "14:30").';
-  } else {
-    voiceInstruction.textContent = 'Speak naturally. Single answer for this question.';
-  }
+  voiceInstruction.textContent = 'Speak naturally. Single voice answer will extract all details for this question.';
 
   btnRecordHero.disabled = !backendHealthy;
   btnRecordHero.classList.remove('recording', 'processing');
@@ -304,15 +308,25 @@ function renderFieldChips() {
     return;
   }
 
-  parsedFields.forEach((f, idx) => {
-    const isAnswered = allAnswers[f.id] !== undefined;
-    const isCurrent  = idx === currentQuestionIndex;
+  // Flatten all fields across groups to show progress chips for all form inputs
+  const allFieldItems = [];
+  parsedFields.forEach((g, gIdx) => {
+    if (g.target_fields && Array.isArray(g.target_fields)) {
+      g.target_fields.forEach(f => allFieldItems.push({ ...f, groupIndex: gIdx, groupTitle: g.label }));
+    } else {
+      allFieldItems.push({ ...g, groupIndex: gIdx, groupTitle: g.label });
+    }
+  });
+
+  allFieldItems.forEach((f) => {
+    const isAnswered = Boolean(allAnswers[f.id] || (f.label && allAnswers[f.label]));
+    const isCurrentGroup = f.groupIndex === currentQuestionIndex;
 
     const chip = document.createElement('span');
     chip.className = 'field-chip';
     chip.style.cursor = 'pointer';
 
-    if (isCurrent) {
+    if (isCurrentGroup) {
       chip.style.borderColor = 'var(--accent)';
       chip.style.background = 'var(--accent-bg)';
       chip.style.color = 'var(--text)';
@@ -327,12 +341,11 @@ function renderFieldChips() {
       <span class="field-chip__type">${escapeHtml(f.type || 'text')}</span>
     `;
 
-    // Click on a chip allows jumping to that question to re-record
-    chip.title = f.interview_prompt || f.label;
+    chip.title = `Question ${f.groupIndex + 1}: ${f.groupTitle}`;
     chip.addEventListener('click', () => {
-      currentQuestionIndex = idx;
+      currentQuestionIndex = f.groupIndex;
       renderCurrentQuestion();
-      log(`Switched to question ${idx + 1}: "${f.label}"`, 'info');
+      log(`Switched to Question ${f.groupIndex + 1}: "${f.groupTitle}"`, 'info');
     });
 
     fieldsChipList.appendChild(chip);
@@ -346,88 +359,88 @@ async function prepareFormInterview() {
   if (!isGoogleForm || !activeTabUrl) return;
 
   fieldsLoading.classList.remove('hidden');
-  fieldsLoading.innerHTML = '<span class="spinner-sm"></span> Model analyzing questions & structuring interview…';
+  fieldsLoading.innerHTML = '<span class="spinner-sm"></span> Extracting form fields…';
   fieldsChipList.classList.add('hidden');
   formFieldsBadge.textContent = 'Preparing…';
 
   const baseUrl = cleanUrl(currentBackendUrl);
   let fields = [];
 
-  // 1. Try Kaggle Endpoint 1: POST /api/v1/prepare-interview
-  if (baseUrl) {
+  // ── Step 1: ALWAYS extract fields from the page DOM first ────────────────
+  // This works 100% of the time (no internet needed on backend).
+  // The backend only needs to bundle them with Gemma, not scrape them.
+  try {
+    log('Extracting fields from page DOM…');
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: activeTabId },
+      func: () => window.__LWP_getKaggleFields?.() || [],
+    });
+    const domFields = results?.[0]?.result;
+    if (Array.isArray(domFields) && domFields.length > 0) {
+      fields = domFields;
+      log(`DOM extracted ${fields.length} raw fields from page.`, 'info');
+    }
+  } catch (err) {
+    log(`DOM extraction error: ${err.message}`, 'info');
+  }
+
+  // ── Step 2: Send pre-extracted fields to Kaggle for Gemma bundling ───────
+  // We send the fields array (not the URL) so Kaggle doesn't need to scrape.
+  if (baseUrl && fields.length > 0) {
     try {
-      log('Requesting POST /api/v1/prepare-interview from Kaggle…');
+      fieldsLoading.innerHTML = '<span class="spinner-sm"></span> Gemma 2 bundling into 2-3 questions…';
+      log('Sending fields to /api/v1/prepare-interview for Gemma bundling…');
+
       const res = await fetch(`${baseUrl}/api/v1/prepare-interview`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'ngrok-skip-browser-warning': 'true',
         },
-        body: JSON.stringify({ url: activeTabUrl }),
-        signal: AbortSignal.timeout(15000),
+        // Send pre-extracted fields directly — no URL scraping needed
+        body: JSON.stringify({ fields: fields, url: activeTabUrl }),
+        signal: AbortSignal.timeout(30000),
       });
 
       if (res.ok) {
         const data = await res.json();
-        if (data.status === 'success' && Array.isArray(data.fields) && data.fields.length > 0) {
-          fields = data.fields;
-          log(`Kaggle prepared ${fields.length} structured interview questions!`, 'success');
+        const incoming = Array.isArray(data.groups) ? data.groups
+                       : Array.isArray(data.fields) ? data.fields
+                       : null;
+        if (data.status === 'success' && incoming && incoming.length > 0) {
+          fields = incoming;
+          log(`Gemma bundled into ${fields.length} interview questions!`, 'success');
         }
       } else {
-        // Fallback: try legacy /api/v1/parse-fields
-        log(`prepare-interview returned ${res.status}. Falling back to /api/v1/parse-fields…`, 'info');
-        const alt = await fetch(`${baseUrl}/api/v1/parse-fields`, {
+        log(`Backend bundling returned ${res.status} — will use client-side bundling.`, 'info');
+      }
+    } catch (err) {
+      log(`Backend bundling failed (${err.message}) — using client-side bundling.`, 'info');
+    }
+  } else if (!fields.length) {
+    // Last resort: try sending URL to backend (may fail if internet disabled)
+    if (baseUrl) {
+      try {
+        const res = await fetch(`${baseUrl}/api/v1/prepare-interview`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': 'true',
-          },
+          headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
           body: JSON.stringify({ url: activeTabUrl }),
-          signal: AbortSignal.timeout(10000),
+          signal: AbortSignal.timeout(20000),
         });
-        if (alt.ok) {
-          const altData = await alt.json();
-          if (altData.status === 'success' && Array.isArray(altData.fields)) {
-            fields = altData.fields;
-          }
+        if (res.ok) {
+          const data = await res.json();
+          const incoming = Array.isArray(data.groups) ? data.groups : Array.isArray(data.fields) ? data.fields : null;
+          if (incoming && incoming.length > 0) fields = incoming;
         }
-      }
-    } catch (err) {
-      log(`Remote prepare failed (${err.message}). Trying DOM fallback…`, 'info');
+      } catch (_) {}
     }
   }
 
-  // 2. Client-side DOM question extractor fallback
-  if (fields.length === 0 && activeTabId) {
-    try {
-      log('Running client-side DOM question extractor fallback…');
-      const results = await chrome.scripting.executeScript({
-        target: { tabId: activeTabId },
-        func: () => window.__LWP_getKaggleFields?.() || [],
-      });
 
-      const domFields = results?.[0]?.result;
-      if (Array.isArray(domFields) && domFields.length > 0) {
-        fields = domFields;
-        log(`DOM fallback extracted ${fields.length} questions from page!`, 'success');
-      }
-    } catch (err) {
-      log(`DOM extraction error: ${err.message}`, 'error');
-    }
-  }
-
-  // Ensure each field has an interview_prompt
-  fields.forEach(f => {
-    if (!f.interview_prompt) {
-      const label = f.label || 'this question';
-      if (f.options && f.options.length > 0) {
-        const optsStr = f.options.slice(0, 4).join(', ') + (f.options.length > 4 ? ', or others' : '');
-        f.interview_prompt = `Which ${label.toLowerCase()} are you with: ${optsStr}?`;
-      } else {
-        f.interview_prompt = label.endsWith('?') ? label : `What is your ${label.toLowerCase()}?`;
-      }
-    }
-  });
+  // ── Client-side bundling ──────────────────────────────────────────────────
+  // If fields are individual (not already grouped by the new backend),
+  // bundle them into 2-3 interview questions so the user only speaks 2-3 times.
+  fields = bundleIntoGroups(fields);
 
   if (fields.length > 0) {
     parsedFields = fields;
@@ -445,6 +458,140 @@ async function prepareFormInterview() {
     formFieldsBadge.textContent = '0 questions';
     updateHeroBtnState();
   }
+}
+
+// ── Bundle individual fields into 2-3 interview groups ────────────────────────
+function bundleIntoGroups(fields) {
+  if (!fields || fields.length === 0) return fields;
+
+  // Flatten if needed (in case already wrapped)
+  let rawFields = [];
+  fields.forEach(f => {
+    if (f.target_fields && Array.isArray(f.target_fields)) {
+      rawFields.push(...f.target_fields);
+    } else {
+      rawFields.push(f);
+    }
+  });
+
+  const n = rawFields.length;
+  // If 3 or fewer fields, each can be its own question
+  if (n <= 3) {
+    return rawFields.map((f, idx) => ({
+      label: f.label || `Field ${idx + 1}`,
+      interview_prompt: f.interview_prompt || `What is your ${(f.label || '').toLowerCase()}?`,
+      target_fields: [f],
+      id: f.id,
+    }));
+  }
+
+  // Helper to build a fluent, specific conversational prompt from an array of fields
+  function buildFluentPrompt(fieldList, defaultPrompt) {
+    const labels = fieldList.map(f => {
+      if (f.options && Array.isArray(f.options) && f.options.length > 0) {
+        const opts = f.options.slice(0, 3).join(', ') + (f.options.length > 3 ? '…' : '');
+        return `${f.label} (options: ${opts})`;
+      }
+      return f.label;
+    });
+
+    if (labels.length === 0) return defaultPrompt;
+    if (labels.length === 1) return `Could you please state your ${labels[0]}?`;
+    if (labels.length === 2) return `Could you please state your ${labels[0]} and ${labels[1]}?`;
+    
+    const last = labels[labels.length - 1];
+    const initial = labels.slice(0, -1).join(', ');
+    return `Could you please provide your ${initial}, and your ${last}?`;
+  }
+
+  // Semantic grouping heuristics for standard forms (Contact, Address, Other/Feedback)
+  const contactKeywords = ['company', 'organization', 'business', 'name', 'contact', 'email', 'phone', 'mobile', 'title', 'role', 'position'];
+  const addressKeywords = ['address', 'street', 'lane', 'house', 'city', 'state', 'province', 'region', 'postal', 'zip', 'country', 'location'];
+
+  const contactFields = [];
+  const addressFields = [];
+  const otherFields = [];
+
+  rawFields.forEach(f => {
+    const lbl = (f.label || '').toLowerCase();
+    if (addressKeywords.some(kw => lbl.includes(kw))) {
+      addressFields.push(f);
+    } else if (contactKeywords.some(kw => lbl.includes(kw))) {
+      contactFields.push(f);
+    } else {
+      otherFields.push(f);
+    }
+  });
+
+  const groups = [];
+
+  // If semantic categorization matched well (at least 2 categories populated)
+  if ((contactFields.length > 0 && addressFields.length > 0) || 
+      (contactFields.length > 0 && otherFields.length > 0) || 
+      (addressFields.length > 0 && otherFields.length > 0)) {
+
+    if (contactFields.length > 0) {
+      groups.push({
+        label: 'Company & Contact Info',
+        interview_prompt: buildFluentPrompt(
+          contactFields,
+          'Please state your company name, contact person name, job title, email address, and phone number.'
+        ),
+        target_fields: contactFields,
+        id: contactFields.map(f => f.id).join(','),
+      });
+    }
+
+    if (addressFields.length > 0) {
+      groups.push({
+        label: 'Physical Address & Location',
+        interview_prompt: buildFluentPrompt(
+          addressFields,
+          'What is your full address including street address, apartment or house name, city, state/region, zip code, and country?'
+        ),
+        target_fields: addressFields,
+        id: addressFields.map(f => f.id).join(','),
+      });
+    }
+
+    if (otherFields.length > 0) {
+      groups.push({
+        label: 'Industry & Additional Details',
+        interview_prompt: buildFluentPrompt(
+          otherFields,
+          'What industry are you in, how did you hear about us, and do you have any additional comments or questions?'
+        ),
+        target_fields: otherFields,
+        id: otherFields.map(f => f.id).join(','),
+      });
+    }
+  }
+
+  // Fallback: If semantic categories didn't cover everything, split rawFields into 2-3 even chunks
+  if (groups.length === 0 || groups.reduce((acc, g) => acc + g.target_fields.length, 0) < n) {
+    groups.length = 0; // reset
+    const numGroups = n <= 5 ? 2 : 3;
+    const chunkSize = Math.ceil(n / numGroups);
+
+    for (let i = 0; i < numGroups; i++) {
+      const chunk = rawFields.slice(i * chunkSize, (i + 1) * chunkSize);
+      if (chunk.length === 0) continue;
+
+      const groupTitles = ['Primary Details', 'Specific Requirements', 'Final Details & Preferences'];
+      const title = groupTitles[i] || `Section ${i + 1}`;
+      const prompt = buildFluentPrompt(chunk, `Please provide the details for ${title}.`);
+
+      groups.push({
+        label: title,
+        interview_prompt: prompt,
+        target_fields: chunk,
+        id: chunk.map(f => f.id).join(','),
+      });
+    }
+  }
+
+  log(`Bundled ${n} form fields into ${groups.length} specific interview questions.`, 'info');
+  return groups;
 }
 
 // ── Check Active Tab ──────────────────────────────────────────────────────────
@@ -597,11 +744,13 @@ async function processSingleAnswerWithKaggle(audioBlob) {
   const currentQ = parsedFields[currentQuestionIndex];
   if (!currentQ) return;
 
-  log(`Sending single answer to /api/v1/process-single-answer for field: ${currentQ.label}…`, 'info');
+  log(`Sending answer for question ${currentQuestionIndex + 1}/${parsedFields.length} to backend…`, 'info');
   const baseUrl = cleanUrl(currentBackendUrl);
 
   const formData = new FormData();
   formData.append('audio_file', audioBlob, 'question_answer.webm');
+  // Send group_meta_json with target_fields
+  formData.append('group_meta_json', JSON.stringify(currentQ));
   formData.append('field_meta_json', JSON.stringify(currentQ));
 
   try {
@@ -620,19 +769,66 @@ async function processSingleAnswerWithKaggle(audioBlob) {
 
     const data = await res.json();
     if (data.status === 'success') {
-      const fieldId   = data.id || currentQ.id;
       const transcript = data.transcript || '';
-      const formatted  = data.formatted_value || transcript;
+      const targets = currentQ.target_fields || [currentQ];
 
-      // Accumulator: store formatted value
-      allAnswers[fieldId]     = formatted;
-      allTranscripts[fieldId] = transcript;
-      mappedEntries           = allAnswers;
+      // Merge and normalize all mapped_entries from this group
+      if (data.mapped_entries && typeof data.mapped_entries === 'object') {
+        for (const [k, v] of Object.entries(data.mapped_entries)) {
+          if (!v || !String(v).trim()) continue;
+          const cleanVal = String(v).trim();
+          const cleanKey = String(k).trim();
 
-      log(`Q${currentQuestionIndex + 1} answered: "${formatted}" (transcription: "${transcript}")`, 'success');
+          // 1. Check if key is already an entry ID
+          const matchedById = targets.find(f => f.id === cleanKey);
+          if (matchedById) {
+            allAnswers[matchedById.id] = cleanVal;
+            if (matchedById.label) allAnswers[matchedById.label] = cleanVal;
+            continue;
+          }
 
-      // Update UI results view
+          // 2. Check if key matches a field label
+          const matchedByLabel = targets.find(f => 
+            f.label && (
+              f.label.toLowerCase() === cleanKey.toLowerCase() ||
+              f.label.toLowerCase().includes(cleanKey.toLowerCase()) ||
+              cleanKey.toLowerCase().includes(f.label.toLowerCase())
+            )
+          );
+          if (matchedByLabel) {
+            allAnswers[matchedByLabel.id] = cleanVal;
+            allAnswers[matchedByLabel.label] = cleanVal;
+            continue;
+          }
+
+          // 3. Fallback: store as-is
+          allAnswers[cleanKey] = cleanVal;
+        }
+      } else {
+        // Legacy fallback: single formatted_value
+        const fieldId = data.id || currentQ.id;
+        const formatted = data.formatted_value || transcript;
+        allAnswers[fieldId] = formatted;
+        if (currentQ.label) allAnswers[currentQ.label] = formatted;
+      }
+      mappedEntries = allAnswers;
+
+      // Count unique target fields mapped so far
+      let totalFieldsCount = 0;
+      let filledFieldsCount = 0;
+      parsedFields.forEach(g => {
+        const fList = g.target_fields || [g];
+        totalFieldsCount += fList.length;
+        fList.forEach(f => {
+          if (allAnswers[f.id] || (f.label && allAnswers[f.label])) filledFieldsCount++;
+        });
+      });
+
+      log(`Q${currentQuestionIndex + 1} answered — ${filledFieldsCount}/${totalFieldsCount} total fields mapped. Transcript: "${transcript}"`, 'success');
+
+      // Update UI results view and field chips
       renderResults(transcript, allAnswers);
+      renderFieldChips();
       chrome.storage.local.set({ lastMappedEntries: allAnswers });
 
       // Advance to next question!
@@ -653,23 +849,43 @@ function renderResults(latestTranscript, answers) {
   sectionResults.classList.remove('hidden');
   transcriptText.textContent = latestTranscript ? `"${latestTranscript}"` : '(No transcript)';
 
-  const keys = Object.keys(answers);
-  mappedCountBadge.textContent = `${keys.length} / ${parsedFields.length} answered`;
-
-  mappedList.innerHTML = '';
-  keys.forEach(k => {
-    const field = parsedFields.find(f => f.id === k);
-    const label = field ? field.label : k;
-    const val   = answers[k];
-
-    const row = document.createElement('div');
-    row.className = 'mapped-item';
-    row.innerHTML = `
-      <span class="mapped-item__label" title="${escapeHtml(label)}">${escapeHtml(label)}</span>
-      <span class="mapped-item__val" title="${escapeHtml(val)}">${escapeHtml(val)}</span>
-    `;
-    mappedList.appendChild(row);
+  // Collect all field definitions across groups
+  const allFieldDefs = [];
+  parsedFields.forEach(g => {
+    if (g.target_fields && Array.isArray(g.target_fields)) {
+      allFieldDefs.push(...g.target_fields);
+    } else {
+      allFieldDefs.push(g);
+    }
   });
+
+  const seenIds = new Set();
+  const uniqueDefs = [];
+  allFieldDefs.forEach(f => {
+    if (!seenIds.has(f.id)) {
+      seenIds.add(f.id);
+      uniqueDefs.push(f);
+    }
+  });
+
+  let filledCount = 0;
+  mappedList.innerHTML = '';
+
+  uniqueDefs.forEach(f => {
+    const val = answers[f.id] || (f.label && answers[f.label]);
+    if (val) {
+      filledCount++;
+      const row = document.createElement('div');
+      row.className = 'mapped-item';
+      row.innerHTML = `
+        <span class="mapped-item__label" title="${escapeHtml(f.label || f.id)}">${escapeHtml(f.label || f.id)}</span>
+        <span class="mapped-item__val" title="${escapeHtml(val)}">${escapeHtml(val)}</span>
+      `;
+      mappedList.appendChild(row);
+    }
+  });
+
+  mappedCountBadge.textContent = `${filledCount} / ${uniqueDefs.length || parsedFields.length} fields filled`;
 }
 
 // ── Complete the Form: Option A — Direct DOM Autofill ─────────────────────────
@@ -748,16 +964,8 @@ if (btnOpenPanel) {
     backendUrlInput.value = currentBackendUrl;
   }
 
-  if (saved.lastParsedFields && saved.lastParsedFields.length > 0) {
-    parsedFields = saved.lastParsedFields;
-    renderFieldChips();
-  }
-
-  if (saved.lastMappedEntries && Object.keys(saved.lastMappedEntries).length > 0) {
-    allAnswers    = saved.lastMappedEntries;
-    mappedEntries = allAnswers;
-    renderResults('', allAnswers);
-  }
+  // Clear stale cached questions and answers on popup init to prevent old sessions from persisting
+  chrome.storage.local.remove(['lastParsedFields', 'lastMappedEntries']);
 
   // Detect active tab and verify Kaggle connection concurrently
   await Promise.all([
